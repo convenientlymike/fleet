@@ -226,6 +226,7 @@ cmd_board() {
   case "$sub" in
     post)
       local text="$*"; [ -z "$text" ] && { log_err 'usage: fleet.sh board post "<text>"'; return 2; }
+      [ -n "$SELF_SID" ] || { log_err "no session identity (\$CLAUDE_CODE_SESSION_ID unset). Pass --id <sid>."; return 1; }
       ensure_self_registered "$SELF_SID"
       local label short; label="$(self_label "$SELF_SID")"; short="$(short_sid "$SELF_SID")"
       board_event note "$label" "$short" "$(jstr text "$text")"
@@ -336,17 +337,25 @@ case "$CMD" in
   help|--help|-h) usage; exit 0 ;;
 esac
 
-# commands below need an identity
-SELF_SID="$(fleet_self_sid)" || { log_err "no session identity (\$CLAUDE_CODE_SESSION_ID unset). Pass --id <sid>."; exit 1; }
+# Identity is OPTIONAL for read-only views (roster/status/doctor/board list) so
+# they work from a plain terminal or CI; mutations resolve it strictly via
+# require_id below.
+SELF_SID="$(fleet_self_sid 2>/dev/null || true)"
 ensure_state
 
+require_id() {
+  [ -n "$SELF_SID" ] && return 0
+  log_err "no session identity (\$CLAUDE_CODE_SESSION_ID unset). Pass --id <sid>."
+  exit 1
+}
+
 case "$CMD" in
-  claim)    cmd_claim "$@" ;;
-  release)  cmd_release "$@" ;;
+  claim)    require_id; cmd_claim "$@" ;;
+  release)  require_id; cmd_release "$@" ;;
   roster)   cmd_roster ;;
-  whoami)   cmd_whoami ;;
-  msg)      cmd_msg "$@" ;;
-  inbox)    cmd_inbox ;;
+  whoami)   require_id; cmd_whoami ;;
+  msg)      require_id; cmd_msg "$@" ;;
+  inbox)    require_id; cmd_inbox ;;
   board)    cmd_board "$@" ;;
   status)   cmd_status ;;
   doctor)   cmd_doctor ;;

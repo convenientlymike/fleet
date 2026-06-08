@@ -10,7 +10,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:-$PWD}"
 [ "${1:-}" = "--" ] && TARGET="$PWD"
 case "${1:-}" in --) shift ;; "") : ;; *) shift || true ;; esac
-[ "${1:-}" = "--" ] && shift || true   # remaining args -> init flags
+if [ "${1:-}" = "--" ]; then shift || true; fi   # remaining args -> init flags
 
 TARGET="$(cd "$TARGET" 2>/dev/null && pwd || echo "$TARGET")"
 if [ ! -d "$TARGET" ]; then echo "target not a directory: $TARGET" >&2; exit 1; fi

@@ -378,7 +378,7 @@ _release_claims_of() {
     meta="$d/meta.json"
     [ -f "$meta" ] || { rm -rf "$d" 2>/dev/null || true; continue; }
     owner="$(json_field_file "$meta" owner_session_id)"
-    [ "$owner" = "$sid" ] && rm -rf "$d" 2>/dev/null || true
+    if [ "$owner" = "$sid" ]; then rm -rf "$d" 2>/dev/null || true; fi
   done
 }
 

@@ -1,6 +1,7 @@
 name: ci
 
-# Fleet is pure Bash — the gate is shellcheck over every script.
+# Fleet is pure Bash. Two gates: shellcheck over every script, and a smoke
+# job that proves the headline guarantee (a foreign claimed edit is blocked).
 on:
   push:
     branches: [main]
@@ -15,7 +16,10 @@ jobs:
       - name: Run shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck install.sh .fleet/bin/*.sh
+          shellcheck --version
+          # Fail on warnings + errors (the substantive checks). info/style notes
+          # are advisory and vary across shellcheck versions, so they don't gate.
+          shellcheck --severity=warning install.sh .fleet/bin/*.sh
 
   smoke:
     name: smoke (init + roster + claim/block)
@@ -26,6 +30,26 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/fleet-scratch && cp -r . /tmp/fleet-scratch/ && cd /tmp/fleet-scratch
+
+          # read-only views must work with NO session identity (plain shell / CI)
           bash .fleet/bin/fleet.sh init
           bash .fleet/bin/fleet.sh doctor
           bash .fleet/bin/fleet.sh roster
+
+          # the headline guarantee: agent-A claims an area; agent-B's edit of a
+          # file under it is hard-blocked (exit 2), while agent-A's own is allowed.
+          mkdir -p src/api
+          bash .fleet/bin/fleet.sh --id ci-agent-A claim src/api "ci smoke"
+
+          foreign='{"session_id":"ci-agent-B","tool_input":{"file_path":"'"$PWD"'/src/api/auth.ts"}}'
+          if printf '%s' "$foreign" | bash .fleet/bin/guard.sh; then
+            echo "FAIL: guard did not block a foreign claimed edit"; exit 1
+          fi
+          echo "OK: guard blocked a foreign claimed edit (exit 2)"
+
+          owner='{"session_id":"ci-agent-A","tool_input":{"file_path":"'"$PWD"'/src/api/auth.ts"}}'
+          if printf '%s' "$owner" | bash .fleet/bin/guard.sh; then
+            echo "OK: owner edit allowed"
+          else
+            echo "FAIL: owner edit was blocked"; exit 1
+          fi

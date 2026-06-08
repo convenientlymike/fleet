@@ -6,7 +6,7 @@ Thanks for helping make parallel Claude Code work safer.
 - **Shell:** POSIX-friendly Bash. Keep it dependency-free (Bash + coreutils + `git`).
 - **Lint:** `shellcheck` is the gate — run it on everything before a PR:
   ```bash
-  shellcheck install.sh .fleet/bin/*.sh
+  shellcheck --severity=warning install.sh .fleet/bin/*.sh
   ```
 - **Atomicity is sacred.** The claim mechanism relies on `mkdir` being atomic +
   fail-if-exists. Don't replace it with read-then-write logic.

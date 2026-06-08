@@ -79,7 +79,7 @@ NEWMSGS=""
 NEW_COUNT=0
 if [ -f "$IBOX" ]; then
   total="$(wc -l < "$IBOX" 2>/dev/null | tr -d ' ')"; [ -z "$total" ] && total=0
-  seen=0; [ -f "$SEEN_FILE" ] && seen="$(cat "$SEEN_FILE" 2>/dev/null | tr -d ' ')"; [ -z "$seen" ] && seen=0
+  seen=0; [ -f "$SEEN_FILE" ] && seen="$(tr -d ' ' < "$SEEN_FILE" 2>/dev/null)"; [ -z "$seen" ] && seen=0
   if [ "$total" -gt "$seen" ]; then
     NEW_COUNT=$(( total - seen ))
     # print the new lines' from+body
