@@ -1,0 +1,6 @@
+{
+  "stale_after_s": 180,
+  "claim_mode": "prefix",
+  "block_mode": "block",
+  "state_location": "local"
+}

@@ -1,0 +1,7 @@
+# Fleet shellcheck configuration.
+#
+# SC1091: every script sources its siblings via a runtime-resolved path
+# (`. "$DIR/lib.sh"`), which shellcheck cannot follow statically. The sources
+# are correct and exercised by CI's smoke job, so we silence the "not following"
+# info rather than littering each call site with a directive.
+disable=SC1091

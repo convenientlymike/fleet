@@ -1,0 +1,22 @@
+# Fleet runtime state (per-machine — agent IDs, claims, inbox)
+.fleet/state/
+
+# Secrets / credentials — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# macOS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs / temp
+*.log
+tmp/
+.cache/
