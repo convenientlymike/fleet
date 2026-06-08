@@ -32,7 +32,14 @@ now_epoch() { date +%s; }
 
 # mtime of a file as epoch seconds; BSD (macOS) then GNU.
 mtime_epoch() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+  # GNU coreutils (Linux) uses `stat -c %Y`; BSD/macOS uses `stat -f %m`. Try GNU
+  # first because BSD `-f` means --file-system on GNU and prints (to stdout) a
+  # filesystem dump that would poison the arithmetic that consumes this. Guard the
+  # result to digits so a surprising platform can never break `$(( ... ))`.
+  local m=""
+  m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)" || m=0
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
 }
 
 ensure_state() {
