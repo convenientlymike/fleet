@@ -360,5 +360,6 @@ case "$CMD" in
   status)   cmd_status ;;
   doctor)   cmd_doctor ;;
   worktree) cmd_worktree "$@" ;;
+  goal)     exec "$(dirname "$0")/goalstack" "$@" ;;   # per-window anchor goal (keyed by this window's session id)
   *) log_err "unknown command: $CMD"; usage; exit 2 ;;
 esac

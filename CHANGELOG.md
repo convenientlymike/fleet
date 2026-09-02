@@ -4,6 +4,18 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-09-01
+
+### Added
+- **Per-window goal stacks** (`.fleet/bin/goalstack` + `fleet.sh goal`). The anti-drift `goalstack` anchor keyed only
+  by project, so parallel windows shared one stack — one window's goal leaked into another's re-injected "active
+  goal" line (hit live: a Monopoly window's goal surfaced in a Pokémon-GO window). `goalstack` now keys **per window**
+  (by the Claude Code session id): each window has its own goal + parent stack. A brand-new window inherits the last
+  shared goal as a **baseline** (single-window continuity across session turnover preserved); live windows each read
+  their own, never cross-contaminated. Backward-compatible: no session id → project-keyed (unchanged). The installer
+  upgrades an older `~/.claude/bin/goalstack` in place only when it lacks the per-window capability (detection-gated).
+  Byproof-tested: two session ids → two stacks; a fresh window inherits the baseline; no-session → project-keyed.
+
 ## [0.2.0] — 2026-09-01
 
 ### Added

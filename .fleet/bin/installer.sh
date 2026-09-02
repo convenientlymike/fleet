@@ -289,6 +289,23 @@ cmd_init() {
 
   ensure_state
   chmod +x "$DIR"/*.sh 2>/dev/null || true
+  chmod +x "$DIR/goalstack" 2>/dev/null || true
+
+  # --- per-window goalstack: upgrade the global ~/.claude/bin/goalstack in place ONLY when it lacks the per-window
+  #     capability (detection-gated — never clobbers a newer/customized one; the re-anchor hook uses the global tool). ---
+  GB_GLOBAL="$HOME/.claude/bin/goalstack"
+  if [ -f "$DIR/goalstack" ]; then
+    if [ ! -f "$GB_GLOBAL" ]; then
+      mkdir -p "$HOME/.claude/bin" && cp "$DIR/goalstack" "$GB_GLOBAL" && chmod +x "$GB_GLOBAL"
+      echo "  goalstack: installed per-window goalstack → ~/.claude/bin/"
+    elif ! grep -q "_window_key" "$GB_GLOBAL" 2>/dev/null; then
+      cp "$GB_GLOBAL" "$GB_GLOBAL.pre-fleet.bak" 2>/dev/null
+      cp "$DIR/goalstack" "$GB_GLOBAL" && chmod +x "$GB_GLOBAL"
+      echo "  goalstack: upgraded ~/.claude/bin/goalstack to per-window (backup: goalstack.pre-fleet.bak)"
+    else
+      echo "  goalstack: ~/.claude/bin/goalstack already per-window (no change)"
+    fi
+  fi
 
   echo
   echo "Done. IMPORTANT: settings.json is read at startup — REOPEN any already-open"

@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""goalstack — the ANTI-DRIFT anchor: a persistent primary-goal stack, re-surfaced on EVERY user message.
+
+Operator-engraved (2026-08-12): "every time I chime in, you start to drift + set focus toward the new message
+instead of what we were originally on. Prevent this." The root cause: no persistent, re-surfaced primary-goal
+anchor — each message resets focus. This is the MECHANISM (not a memo): a UserPromptSubmit hook re-injects the
+current goal stack on every message, so an interjection is HANDLED-THEN-RETURNED, never a silent context-switch.
+
+The discipline it enforces (see ~/.claude/CLAUDE.md "Anti-drift"): on every operator message, CLASSIFY it —
+  · refinement of the current goal   → fold in + continue the SAME thread
+  · side-observation / quick question → answer briefly, then RETURN to the primary goal
+  · genuine new goal / redirect       → `goalstack push` (or `set`) it, state the switch explicitly
+Never silently abandon the in-flight goal. The stack is the source of truth for "what we were originally on."
+
+USAGE:
+  goalstack set "<primary goal>"     # set THE primary goal (the old primary is pushed under it as a parent)
+  goalstack push "<sub-goal>"        # descend into a sub-goal (parent stays on the stack)
+  goalstack pop                      # finish the current sub-goal → return to the parent
+  goalstack done                     # mark the primary done → surface the parent (or empty)
+  goalstack show                     # print the stack (what the hook injects)
+  goalstack note "<a running note>"  # attach a one-line status note to the current goal
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+STORE = Path(os.path.expanduser("~")) / ".claude" / "goals"
+
+
+def _slug() -> str:
+    return str(Path.cwd()).replace(os.sep, "-").strip("-") or "root"
+
+
+def _window_key() -> str:
+    # PER-WINDOW routing (fleet hardening 2026-09-01): each Claude Code window has a distinct session id, so keying
+    # the stack by it gives every parallel window its OWN goal stack — no cross-contamination between windows sharing
+    # one project (the bug: Window B's goal leaked into Window A's re-anchor). GOALSTACK_WINDOW overrides (tests /
+    # explicit routing). Empty when there's no session context → project-keyed (single-window, unchanged).
+    return (os.environ.get("GOALSTACK_WINDOW") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()[:12]
+
+
+def _baseline_path() -> Path:
+    STORE.mkdir(parents=True, exist_ok=True)
+    return STORE / f"{_slug()}.json"
+
+
+def _path() -> Path:
+    STORE.mkdir(parents=True, exist_ok=True)
+    wk = _window_key()
+    return STORE / (f"{_slug()}__{wk}.json" if wk else f"{_slug()}.json")
+
+
+def _load() -> dict:
+    p = _path()
+    # A fresh window (new session) inherits the shared BASELINE — the last goal any window set — on first read, so
+    # single-window continuity across session turnover is preserved; this window's own set/push then diverges.
+    if not p.exists() and _window_key():
+        p = _baseline_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except ValueError:
+            return {}
+    return {}
+
+
+def _save(d: dict) -> None:
+    text = json.dumps(d, indent=2) + "\n"
+    _path().write_text(text)
+    # Mirror to the shared baseline so a BRAND-NEW window inherits the latest goal (continuity). Live windows each
+    # read their OWN per-window stack, so this baseline seeds only a fresh window — it never cross-contaminates one.
+    if _window_key():
+        _baseline_path().write_text(text)
+
+
+def _now_ts() -> str:
+    # Date.now-free: use the shell's stat of nothing — just a monotonic-ish counter via the file. Keep it simple:
+    # store an incrementing seq instead of a wall clock (wall clock isn't needed for the anchor).
+    return ""
+
+
+def cmd_set(goal: str) -> int:
+    d = _load()
+    stack = d.get("stack", [])
+    if d.get("primary"):
+        stack.insert(0, {"goal": d["primary"], "note": d.get("note", "")})
+    _save({"primary": goal, "note": "", "stack": stack})
+    print(f"goalstack: PRIMARY set → {goal}")
+    return 0
+
+
+def cmd_push(goal: str) -> int:
+    d = _load()
+    stack = d.get("stack", [])
+    if d.get("primary"):
+        stack.insert(0, {"goal": d["primary"], "note": d.get("note", "")})
+    _save({"primary": goal, "note": "", "stack": stack})
+    print(f"goalstack: pushed sub-goal → {goal}")
+    return 0
+
+
+def cmd_pop() -> int:
+    d = _load()
+    stack = d.get("stack", [])
+    if stack:
+        parent = stack.pop(0)
+        _save({"primary": parent["goal"], "note": parent.get("note", ""), "stack": stack})
+        print(f"goalstack: popped → back to: {parent['goal']}")
+    else:
+        _save({"primary": "", "note": "", "stack": []})
+        print("goalstack: stack empty")
+    return 0
+
+
+def cmd_done() -> int:
+    return cmd_pop()
+
+
+def cmd_note(note: str) -> int:
+    d = _load()
+    d["note"] = note
+    _save(d)
+    print(f"goalstack: note → {note}")
+    return 0
+
+
+def cmd_show(for_hook: bool = False) -> int:
+    d = _load()
+    primary = d.get("primary", "")
+    if not primary:
+        if not for_hook:
+            print("goalstack: (no goal set) — `goalstack set \"<goal>\"`")
+        return 0
+    stack = d.get("stack", [])
+    note = d.get("note", "")
+    if for_hook:
+        # Compact, injected into context on every user message — the re-anchor.
+        line = f"⎇ ACTIVE GOAL (re-anchor — handle this message, then RETURN here; don't silently switch): {primary}"
+        if note:
+            line += f"  [status: {note}]"
+        if stack:
+            line += "\n  parent goals (return to these after): " + " ← ".join(s["goal"] for s in stack[:3])
+        print(line)
+    else:
+        print(f"PRIMARY: {primary}" + (f"  [status: {note}]" if note else ""))
+        for i, s in enumerate(stack):
+            print(f"  parent[{i}]: {s['goal']}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    cmd = argv[0] if argv else "show"
+    arg = " ".join(argv[1:]).strip()
+    if cmd == "set":
+        return cmd_set(arg) if arg else (print("goalstack: set needs a goal") or 1)
+    if cmd == "push":
+        return cmd_push(arg) if arg else (print("goalstack: push needs a goal") or 1)
+    if cmd == "pop":
+        return cmd_pop()
+    if cmd == "done":
+        return cmd_done()
+    if cmd == "note":
+        return cmd_note(arg)
+    if cmd in ("show", "--hook"):
+        return cmd_show(for_hook=(cmd == "--hook"))
+    print(__doc__)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

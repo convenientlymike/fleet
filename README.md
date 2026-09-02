@@ -63,6 +63,14 @@ same file seconds apart — silently overwriting each other's work.
   work, never touching the primary tree or stashing anyone's changes. Clean tree → runs in place (fast path).
 - **One line to adopt** — wrap your existing gate in your pre-push hook: `exec .fleet/bin/isolated-gate.sh -- bash <your gate>`.
 
+### 🎯 Per-window goal stacks
+- **Each window keeps its OWN anchor goal.** The `goalstack` anti-drift anchor keyed only by *project*, so parallel
+  windows shared one stack — Window B's goal leaked into Window A's re-injected "active goal" line. Now `goalstack`
+  keys **per window** (by the Claude Code session id): each window has its own goal + parent stack, so an interjection
+  in one window never rewrites another's focus. A brand-new window inherits the last shared goal as a **baseline**
+  (single-window continuity across session turnover is preserved); live windows each read their own — never
+  cross-contaminated. Ships as `.fleet/bin/goalstack`; `fleet.sh goal set|show|note|pop` drives it.
+
 ## 📸 A look inside
 
 The hero above is a **real** session — three live agents, and a claimed file
