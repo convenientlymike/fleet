@@ -54,6 +54,15 @@ same file seconds apart — silently overwriting each other's work.
 - **Shared tree (default)** — all windows edit one working copy; claims + the guard prevent same-file collisions.
 - **Worktree mode** — each window gets its own git worktree (true file isolation) with Fleet coordinating intent across them.
 
+### 🚦 Push-safe under parallelism
+- **A sibling window's uncommitted work can't false-red your push.** A pre-push gate that lints/tests the whole repo
+  reads the *filesystem* — i.e. **every** live window's uncommitted work at once — so one window's mid-build files
+  (an untested new component, a half-edited config) could block another window's push even when its **commit** was
+  perfectly green. `.fleet/bin/isolated-gate.sh` fixes it: when the shared tree is dirty, it validates the pushed
+  **commit** in a clean ephemeral git worktree (with the project's heavy deps symlinked in) — bypassing the sibling's
+  work, never touching the primary tree or stashing anyone's changes. Clean tree → runs in place (fast path).
+- **One line to adopt** — wrap your existing gate in your pre-push hook: `exec .fleet/bin/isolated-gate.sh -- bash <your gate>`.
+
 ## 📸 A look inside
 
 The hero above is a **real** session — three live agents, and a claimed file

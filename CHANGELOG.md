@@ -4,6 +4,17 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-09-01
+
+### Added
+- **`isolated-gate.sh` — push-safe under parallelism.** A pre-push gate that lints/tests the whole repo reads the
+  *filesystem* (every live window's uncommitted work at once), so a sibling window's mid-build files could false-red
+  another window's push even when its **commit** was green. The new helper validates the pushed **commit** in a clean
+  ephemeral git worktree (deps symlinked) when the shared tree is dirty — bypassing the sibling's work, never touching
+  the primary tree or stashing. Clean tree → runs in place (fast path). Real failures in your own commit still bite.
+  Wire it in one line: `exec .fleet/bin/isolated-gate.sh -- bash <your gate>`. Byproof-tested (a dirty foreign file is
+  invisible to the isolated command; a real commit failure propagates).
+
 ## [0.1.0] — 2026-06
 
 Initial release.
