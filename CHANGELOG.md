@@ -4,6 +4,28 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-09-02
+
+### Added
+- **Shared-tree collateral protection.** When several windows share one working tree + git index, a broad
+  `git add -A` / `commit -a` could sweep another window's uncommitted work into a commit (it has pushed a sibling's
+  work under the wrong message). Five layers close it, each with a control that bites (`bin/selftest-collateral.sh`):
+  a **PostToolUse heartbeat** (`bin/heartbeat.sh`) so a working window never reads stale mid-turn; **reap keeps a
+  claim whose path is still dirty** (live work ≠ orphan); a liveness-free **pre-commit `commit-guard.sh`** that blocks
+  a staged file covered by a foreign claim when the owner is live *or* the path is dirty; a SessionStart
+  **`multiwindow_nudge.sh`** steering a 2nd window to a per-window worktree; and `release` refusing to drop a claim on
+  uncommitted work.
+- **DM durability — a message to a momentarily-stale window is never dropped.** `reap()` now **keeps** a stale agent
+  file (freeing its non-dirty claims) so the sid stays addressable, GC-deleting it only past `agent_gc_s` (default
+  24h); `sid_for_target` resolves any known (live *or* kept-stale) window; `cmd_msg` delivers to its inbox regardless
+  of liveness (surfaced on return by `awareness.sh`). Control: `selftest-collateral` **D**.
+
+### Changed
+- **Liveness tuned for long autonomous turns.** `stale_after_s` default **180 → 900**; the PostToolUse heartbeat
+  matcher is **`*`** (every tool refreshes liveness, not just Edit/Write/Bash); and the heartbeat **re-creates** an
+  agent file `reap()` already deleted (a tool just ran ⇒ the window is provably alive). `ensure_self_registered` moved
+  to `lib.sh` so the heartbeat can share it. New config key: `agent_gc_s` (86400).
+
 ## [0.3.0] — 2026-09-01
 
 ### Added

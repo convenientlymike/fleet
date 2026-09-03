@@ -10,8 +10,9 @@ GITIGNORE="$PROJECT_ROOT/.gitignore"
 CLAUDEMD="$PROJECT_ROOT/CLAUDE.md"
 
 # fixed hook objects (relative paths -> portable across clones)
-SS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/register.sh"}]}'
+SS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"}]}'
 PRE_OBJ='{"matcher":"Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":".fleet/bin/guard.sh"}]}'
+POST_OBJ='{"matcher":"*","hooks":[{"type":"command","command":".fleet/bin/heartbeat.sh"}]}'
 UPS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/awareness.sh"}]}'
 SE_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/deregister.sh"}]}'
 ALLOW='"Bash(.fleet/bin/fleet.sh:*)"'
@@ -23,6 +24,7 @@ _print_settings_block() {
   "hooks": {
     "SessionStart":     [ $SS_OBJ ],
     "PreToolUse":       [ $PRE_OBJ ],
+    "PostToolUse":      [ $POST_OBJ ],
     "UserPromptSubmit": [ $UPS_OBJ ],
     "SessionEnd":       [ $SE_OBJ ]
   }
@@ -39,12 +41,13 @@ _merge_settings() {
   local cur="$1" out
   if _have jq; then
     out="$(printf '%s' "$cur" | jq 2>/dev/null \
-      --argjson ss "$SS_OBJ" --argjson pre "$PRE_OBJ" --argjson ups "$UPS_OBJ" --argjson se "$SE_OBJ" \
+      --argjson ss "$SS_OBJ" --argjson pre "$PRE_OBJ" --argjson post "$POST_OBJ" --argjson ups "$UPS_OBJ" --argjson se "$SE_OBJ" \
       --arg allow "Bash(.fleet/bin/fleet.sh:*)" '
       def strip(a): (a // []) | map(select(((.hooks // []) | any((.command // "") | contains(".fleet/bin/"))) | not));
       .hooks = (.hooks // {})
       | .hooks.SessionStart    = (strip(.hooks.SessionStart)    + [$ss])
       | .hooks.PreToolUse      = (strip(.hooks.PreToolUse)      + [$pre])
+      | .hooks.PostToolUse     = (strip(.hooks.PostToolUse)     + [$post])
       | .hooks.UserPromptSubmit= (strip(.hooks.UserPromptSubmit)+ [$ups])
       | .hooks.SessionEnd      = (strip(.hooks.SessionEnd)      + [$se])
       | .permissions = (.permissions // {})
@@ -104,8 +107,9 @@ else:
         sys.stderr.write("fleet: existing settings.json is not valid JSON/JSONC; refusing to overwrite.\n")
         sys.exit(2)
 if not isinstance(d,dict): d={}
-ss={"hooks":[{"type":"command","command":".fleet/bin/register.sh"}]}
+ss={"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"}]}
 pre={"matcher":"Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":".fleet/bin/guard.sh"}]}
+post={"matcher":"*","hooks":[{"type":"command","command":".fleet/bin/heartbeat.sh"}]}
 ups={"hooks":[{"type":"command","command":".fleet/bin/awareness.sh"}]}
 se={"hooks":[{"type":"command","command":".fleet/bin/deregister.sh"}]}
 allow="Bash(.fleet/bin/fleet.sh:*)"
@@ -118,6 +122,7 @@ def strip(a):
 h=d.get("hooks") or {}
 h["SessionStart"]=strip(h.get("SessionStart"))+[ss]
 h["PreToolUse"]=strip(h.get("PreToolUse"))+[pre]
+h["PostToolUse"]=strip(h.get("PostToolUse"))+[post]
 h["UserPromptSubmit"]=strip(h.get("UserPromptSubmit"))+[ups]
 h["SessionEnd"]=strip(h.get("SessionEnd"))+[se]
 d["hooks"]=h

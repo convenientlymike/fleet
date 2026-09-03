@@ -59,6 +59,10 @@ config_get() {
 stale_after() { config_get stale_after_s 180; }
 claim_mode()  { config_get claim_mode prefix; }   # prefix | exact
 block_mode()  { config_get block_mode block; }     # block  | warn
+# A stale agent file is KEPT (so its sid stays ADDRESSABLE for DMs — a message to a momentarily-stale window must
+# not be dropped) until its mtime exceeds agent_gc_s (default 24h), then reap() GC-deletes it so AGENTS_DIR stays
+# bounded. count_live/roster remain mtime-based (< stale_after), so a kept-stale file never counts as live.
+agent_gc_s()  { config_get agent_gc_s 86400; }
 
 # ---- JSON reading (jq -> python3 -> grep/sed) ------------------------------
 # json_field_str '<json text>' <key>  — extract a flat OR dotted string/number key.
@@ -252,6 +256,34 @@ next_label() {
   printf 'agent-%s' "$n"
 }
 
+# ensure_self_registered <sid> — touch an EXISTING agent file, or RE-CREATE a reaped one for a provably-alive
+# session. Lives in lib.sh (not fleet.sh) so the PostToolUse heartbeat can call it too: a tool just ran in this
+# session ⇒ the window IS alive, so if reap() already deleted its file (it went > stale_after_s between events —
+# a read/think-heavy or long-single-tool turn), we resurrect it here instead of leaving it invisible until its
+# next prompt/SessionStart. This is the tail-fix for the 2026-09-02 collateral hardening (C0a). Idempotent,
+# fail-open, parallel-safe (atomic tmp+mv).
+ensure_self_registered() {
+  local sid="$1" f label short
+  f="$(agent_file "$sid")"
+  [ -f "$f" ] && { touch "$f" 2>/dev/null || true; return 0; }
+  ensure_state
+  short="$(short_sid "$sid")"; label="$(next_label)"
+  local tmp="$f.tmp.$$"
+  {
+    printf '{'
+    printf '%s,' "$(jstr session_id "$sid")"
+    printf '%s,' "$(jstr agent "$label")"
+    printf '%s,' "$(jstr short "$short")"
+    printf '%s,' "$(jstr source cli)"
+    printf '%s,' "$(jstr cwd "$PROJECT_ROOT")"
+    printf '%s,' "$(jstr started_at "$(now_iso)")"
+    printf '%s,' "$(jstr last_seen "$(now_iso)")"
+    printf '%s'  "$(jstr status active)"
+    printf '}\n'
+  } > "$tmp" 2>/dev/null
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
 # ---- append-only logs (atomic for small single-line writes) ----------------
 append_board()  { printf '%s\n' "$1" >> "$BOARD_FILE"  2>/dev/null || true; }
 append_ledger() { printf '%s\n' "$1" >> "$LEDGER_FILE" 2>/dev/null || true; }
@@ -337,19 +369,58 @@ _path_covers() {
 }
 
 # ---- reaper ----------------------------------------------------------------
+# _claim_path_dirty <meta.json> — 0 (dirty) if the claim's stored `path` has UNCOMMITTED changes in the working
+# tree; 1 (clean) otherwise / on any error. THE C0b COLLATERAL FIX (2026-09-02): a claim over DIRTY content is
+# evidence of LIVE WORK, not an orphan — reap must NOT release it. An actively-working window can read STALE during
+# a long turn (heartbeat lapse) and, without this guard, reap() GC's its dirty-covering claim, leaving the files
+# ownerless for a sibling's `commit -a` to sweep. Prefix-safe (a dir path checks everything under it). Fails toward
+# CLEAN (return 1) on non-git / empty-path / error — the commit-guard C1 dirty-claim block is the backstop.
+_claim_path_dirty() {
+  local meta="$1" p
+  [ -f "$meta" ] || return 1
+  p="$(json_field_file "$meta" path 2>/dev/null)"
+  [ -z "$p" ] && return 1
+  _have git || return 1
+  [ -n "$(git -C "$PROJECT_ROOT" status --porcelain -- "$p" 2>/dev/null)" ] && return 0
+  return 1
+}
+
 # reap — remove dead agents and orphaned claims. Safe to call from any context
 # that is allowed to write (NOT from guard.sh, which stays read-only).
+# _agent_has_releasable_claims <sid> — true iff sid owns ≥1 claim reap WOULD free (a non-dirty claim). Lets reap
+# emit its stale/claims-freed board event exactly once (after freeing, none remain), never re-spamming for a kept
+# file. A dirty-path claim (C0b, kept) is NOT releasable, so it never triggers a re-emit.
+_agent_has_releasable_claims() {
+  local sid="$1" d meta
+  for d in "$CLAIMS_DIR"/*.lock; do
+    [ -d "$d" ] || continue
+    meta="$d/meta.json"; [ -f "$meta" ] || continue
+    [ "$(json_field_file "$meta" owner_session_id)" = "$sid" ] || continue
+    _claim_path_dirty "$meta" && continue
+    return 0
+  done
+  return 1
+}
+
 reap() {
   local f sid d meta owner
   ensure_state
-  # dead agents
+  # stale agents: KEEP the agent file (the sid stays ADDRESSABLE so a DM to a momentarily-stale window reaches its
+  # inbox instead of being dropped — see sid_for_target + cmd_msg) but free its non-dirty claims. GC a file whose
+  # mtime is past agent_gc_s (truly abandoned) so AGENTS_DIR stays bounded. Emit the board event ONCE per transition
+  # (only when this pass frees a claim, or on GC) — reap runs on every fleet cmd, so an unconditional emit would
+  # re-spam the board for the same kept file every call.
+  local gc_s; gc_s="$(agent_gc_s)"
   for f in "$AGENTS_DIR"/*.json; do
     [ -f "$f" ] || continue
     sid="$(basename "$f" .json)"
-    if ! is_live "$sid"; then
-      local lbl; lbl="$(json_field_file "$f" agent)"
-      rm -f "$f" 2>/dev/null || true
-      _release_claims_of "$sid"
+    is_live "$sid" && continue
+    local lbl; lbl="$(json_field_file "$f" agent)"
+    if [ $(( $(now_epoch) - $(mtime_epoch "$f") )) -gt "$gc_s" ]; then
+      _release_claims_of "$sid"; rm -f "$f" 2>/dev/null || true
+      board_event reap "${lbl:-?}" "$(short_sid "$sid")" "$(jstr reason gc)"
+    elif _agent_has_releasable_claims "$sid"; then
+      _release_claims_of "$sid"   # KEEP the file; free only its non-dirty claims (C0b keeps dirty-path claims)
       board_event reap "${lbl:-?}" "$(short_sid "$sid")" "$(jstr reason stale)"
     fi
   done
@@ -363,6 +434,7 @@ reap() {
     if [ -f "$meta" ]; then
       owner="$(json_field_file "$meta" owner_session_id)"
       if [ -z "$owner" ] || ! is_live "$owner"; then
+        _claim_path_dirty "$meta" && continue   # C0b: a claim over DIRTY content is live work, not an orphan — keep it
         rm -rf "$d" 2>/dev/null || true
       fi
     else
@@ -377,7 +449,10 @@ reap() {
 # considered orphaned (covers the mkdir->write-meta window).
 FLEET_CLAIM_GRACE="${FLEET_CLAIM_GRACE:-5}"
 
-# _release_claims_of <sid> — rm -rf every claim owned by sid.
+# _release_claims_of <sid> — rm -rf every claim owned by sid EXCEPT one covering still-dirty content (C0b: a
+# reaped dead/stale agent's claim over uncommitted work is kept, so a sibling's commit-a can't sweep the ownerless
+# files; the commit-guard C1 then blocks committing them until the work is committed/discarded → the path goes clean
+# → the next reap removes the now-safe claim). This is the exact 2026-09-02 incident's fix.
 _release_claims_of() {
   local sid="$1" d meta owner
   for d in "$CLAIMS_DIR"/*.lock; do
@@ -385,7 +460,10 @@ _release_claims_of() {
     meta="$d/meta.json"
     [ -f "$meta" ] || { rm -rf "$d" 2>/dev/null || true; continue; }
     owner="$(json_field_file "$meta" owner_session_id)"
-    if [ "$owner" = "$sid" ]; then rm -rf "$d" 2>/dev/null || true; fi
+    if [ "$owner" = "$sid" ]; then
+      _claim_path_dirty "$meta" && continue   # C0b: don't release a claim covering uncommitted work
+      rm -rf "$d" 2>/dev/null || true
+    fi
   done
 }
 

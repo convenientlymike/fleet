@@ -1,5 +1,6 @@
 {
-  "stale_after_s": 180,
+  "stale_after_s": 900,
+  "agent_gc_s": 86400,
   "claim_mode": "prefix",
   "block_mode": "block",
   "state_location": "local"

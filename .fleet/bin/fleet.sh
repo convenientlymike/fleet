@@ -16,27 +16,7 @@ fleet_self_sid() {
   return 1
 }
 
-ensure_self_registered() {
-  local sid="$1" f label short
-  f="$(agent_file "$sid")"
-  [ -f "$f" ] && { touch "$f" 2>/dev/null || true; return 0; }
-  ensure_state
-  short="$(short_sid "$sid")"; label="$(next_label)"
-  local tmp="$f.tmp.$$"
-  {
-    printf '{'
-    printf '%s,' "$(jstr session_id "$sid")"
-    printf '%s,' "$(jstr agent "$label")"
-    printf '%s,' "$(jstr short "$short")"
-    printf '%s,' "$(jstr source cli)"
-    printf '%s,' "$(jstr cwd "$PROJECT_ROOT")"
-    printf '%s,' "$(jstr started_at "$(now_iso)")"
-    printf '%s,' "$(jstr last_seen "$(now_iso)")"
-    printf '%s'  "$(jstr status active)"
-    printf '}\n'
-  } > "$tmp" 2>/dev/null
-  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-}
+# ensure_self_registered() moved to lib.sh (shared with heartbeat.sh — the C0a re-create tail-fix).
 
 self_label() { json_field_file "$(agent_file "$1")" agent; }
 
@@ -65,12 +45,21 @@ PY
 }
 
 # ---- resolve a recipient target (label | short | sid) to a sid -------------
+# Iterates ALL known agent files — LIVE and KEPT-STALE (reap keeps a stale agent file so a momentarily-stale
+# window stays addressable; a DM must reach its inbox, not be dropped). Prefers a live match; falls back to any
+# kept-stale file. Returns 1 only for a truly unknown/GC'd sid.
 sid_for_target() {
-  local t="$1" sid lbl sh
-  for sid in $(live_sids); do
+  local t="$1" sid lbl sh f
+  for sid in $(live_sids); do          # pass 1: prefer a LIVE match
     [ "$sid" = "$t" ] && { printf '%s' "$sid"; return 0; }
-    lbl="$(json_field_file "$(agent_file "$sid")" agent)"
-    sh="$(short_sid "$sid")"
+    lbl="$(json_field_file "$(agent_file "$sid")" agent)"; sh="$(short_sid "$sid")"
+    if [ "$lbl" = "$t" ] || [ "$sh" = "$t" ]; then printf '%s' "$sid"; return 0; fi
+  done
+  for f in "$AGENTS_DIR"/*.json; do     # pass 2: any KNOWN (kept-stale) agent file — still addressable for a DM
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .json)"
+    [ "$sid" = "$t" ] && { printf '%s' "$sid"; return 0; }
+    lbl="$(json_field_file "$f" agent)"; sh="$(short_sid "$sid")"
     if [ "$lbl" = "$t" ] || [ "$sh" = "$t" ]; then printf '%s' "$sid"; return 0; fi
   done
   return 1
@@ -201,7 +190,7 @@ cmd_msg() {
     board_event msg "$from" "$short" "$(jstr to all),$(jstr body "$body")"
     echo "broadcast to $c agent(s)"
   else
-    local rsid; rsid="$(sid_for_target "$to")" || { log_err "no live agent matches '$to' (try fleet.sh roster)"; return 1; }
+    local rsid; rsid="$(sid_for_target "$to")" || { log_err "no agent (live or recently-seen) matches '$to' (try fleet.sh roster)"; return 1; }
     _emit_msg "$rsid"
     board_event msg "$from" "$short" "$(jstr to "$to"),$(jstr body "$body")"
     echo "sent to $to"
