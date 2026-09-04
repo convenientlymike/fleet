@@ -71,6 +71,17 @@ same file seconds apart — silently overwriting each other's work.
   (single-window continuity across session turnover is preserved); live windows each read their own — never
   cross-contaminated. Ships as `.fleet/bin/goalstack`; `fleet.sh goal set|show|note|pop` drives it.
 
+### 📟 Wake on message — real agent-to-agent handoff
+- **A `msg` can actually WAKE the recipient**, instead of sitting unseen until they next happen to run. A file
+  append can't wake an idle agent (it's blocked on its stdin pipe, not polling the inbox), so Fleet closes the loop
+  two ways. **Live windows:** `fleet.sh wake-cmd` prints a one-line watcher to hand to the Monitor tool — a new DM
+  then re-invokes that window to act (the SessionStart nudge reminds each agent to arm it once). **Closed windows:**
+  the optional, opt-in `wake-dispatcher.sh` headless-resumes an offline session to process its inbox — with a
+  process-liveness alive-guard (never races a live transcript), rate-limit + cooldown + kill-switch, and **dry-run by
+  default** (`--selftest` proves every guard bites). And `SessionEnd` now **preserves UNREAD DMs** so a handoff to a
+  window that closes first is never lost. The dispatcher is the one part that steps beyond "just files + hooks" — it
+  is never installed or started by `init`.
+
 ## 📸 A look inside
 
 The hero above is a **real** session — three live agents, and a claimed file
@@ -118,6 +129,7 @@ like — each is now a coordinating agent.
 .fleet/bin/fleet.sh release src/api        # done
 .fleet/bin/fleet.sh msg agent-1 "ping"     # message another window
 .fleet/bin/fleet.sh inbox                  # read messages
+.fleet/bin/fleet.sh wake-cmd               # print the Monitor-tool watcher that WAKES you on a new DM
 .fleet/bin/fleet.sh worktree enable        # opt into per-window git worktrees
 ```
 

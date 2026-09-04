@@ -108,10 +108,11 @@ tmpd="$(mktemp -d)"
 (
   cd "$tmpd"
   . "$DIR/lib.sh" 2>/dev/null
-  PROJECT_ROOT="$tmpd"
+  # export the sandbox globals so sourced lib.sh helpers see them (and shellcheck knows they're used, not dead)
+  export PROJECT_ROOT="$tmpd"
   export FLEET_STATE_DIR="$tmpd/.fleet-state"
   STATE_DIR="$FLEET_STATE_DIR"; AGENTS_DIR="$STATE_DIR/agents"; CLAIMS_DIR="$STATE_DIR/claims"
-  BOARD_FILE="$STATE_DIR/board.jsonl"; LEDGER_FILE="$STATE_DIR/ledger.jsonl"; INBOX_DIR="$STATE_DIR/inbox"
+  export BOARD_FILE="$STATE_DIR/board.jsonl"; export LEDGER_FILE="$STATE_DIR/ledger.jsonl"; INBOX_DIR="$STATE_DIR/inbox"
   mkdir -p "$AGENTS_DIR" "$CLAIMS_DIR" "$INBOX_DIR"
   age1h() { touch -d '1 hour ago' "$1" 2>/dev/null || touch -t "$(date -v-1H +%Y%m%d%H%M)" "$1"; }
 

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.fleet.wake-dispatcher — OPTIONAL launchd agent for waking OFFLINE sessions (Part B).
+
+  Fleet's core is "just files + hooks" and stays daemon-free. This dispatcher is an OPT-IN extra: it is not
+  installed or started by `fleet.sh init`, and nothing runs it unless YOU load this agent. Live sessions are
+  woken by their own Monitor (see `fleet.sh wake-cmd`); this only handles sessions whose process is gone.
+
+  ⚠ IT SPAWNS BILLABLE claude TURNS AUTONOMOUSLY. Treat it like any metered surface:
+     1. FIRST run it by hand in DRY-RUN to watch what it WOULD do (no --live):
+          .fleet/bin/wake-dispatcher.sh --watch          # prints wake PLANS only, spawns nothing
+     2. Only add --live (below) once you trust the plan. rate-limit + cooldown + kill-switch bound the cost;
+        the ceiling is still (FLEET_WAKE_MAX wakes / FLEET_WAKE_WINDOW s) × (a context reload each).
+     3. KILL SWITCH any time:   touch <PROJECT_ROOT>/.fleet/state/wake-dispatcher.OFF   (delete to re-enable)
+        or: launchctl unload the agent.
+
+  INSTALL (per project — fleet state is per-repo; run from the project root):
+     sed "s#__PROJECT_ROOT__#$PWD#" .fleet/bin/com.fleet.wake-dispatcher.plist.template \
+       > ~/Library/LaunchAgents/com.fleet.wake-dispatcher.plist
+     launchctl load ~/Library/LaunchAgents/com.fleet.wake-dispatcher.plist
+  UNINSTALL:
+     launchctl unload ~/Library/LaunchAgents/com.fleet.wake-dispatcher.plist && \
+       rm ~/Library/LaunchAgents/com.fleet.wake-dispatcher.plist
+
+  Multi-project note: give each project its own Label + plist (append the repo name) so fleets never collide —
+  never one dispatcher hardcoded to a single repo.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>              <string>com.fleet.wake-dispatcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__PROJECT_ROOT__/.fleet/bin/wake-dispatcher.sh</string>
+    <string>--watch</string>
+    <!-- add <string>--live</string> ONLY after a dry-run review (see the header) -->
+  </array>
+  <key>WorkingDirectory</key>   <string>__PROJECT_ROOT__</string>
+  <key>RunAtLoad</key>          <true/>
+  <key>KeepAlive</key>          <true/>
+  <key>ThrottleInterval</key>   <integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>               <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>FLEET_WAKE_MAX</key>     <string>5</string>
+    <key>FLEET_WAKE_WINDOW</key>  <string>60</string>
+    <key>FLEET_WAKE_COOLDOWN</key><string>120</string>
+    <key>FLEET_WAKE_TIMEOUT</key> <string>240</string>
+    <key>FLEET_WAKE_INTERVAL</key><string>10</string>
+    <!-- headless permission floor; raise deliberately (see wake-dispatcher.sh SAFETY): -->
+    <key>FLEET_WAKE_PERMISSION</key><string>acceptEdits</string>
+  </dict>
+  <key>StandardOutPath</key>    <string>__PROJECT_ROOT__/.fleet/state/wake/dispatcher.out.log</string>
+  <key>StandardErrorPath</key>  <string>__PROJECT_ROOT__/.fleet/state/wake/dispatcher.err.log</string>
+</dict>
+</plist>
