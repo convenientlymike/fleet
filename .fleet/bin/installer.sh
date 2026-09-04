@@ -10,7 +10,7 @@ GITIGNORE="$PROJECT_ROOT/.gitignore"
 CLAUDEMD="$PROJECT_ROOT/CLAUDE.md"
 
 # fixed hook objects (relative paths -> portable across clones)
-SS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"}]}'
+SS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"},{"type":"command","command":".fleet/bin/wake_nudge.sh"}]}'
 PRE_OBJ='{"matcher":"Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":".fleet/bin/guard.sh"}]}'
 POST_OBJ='{"matcher":"*","hooks":[{"type":"command","command":".fleet/bin/heartbeat.sh"}]}'
 UPS_OBJ='{"hooks":[{"type":"command","command":".fleet/bin/awareness.sh"}]}'
@@ -107,7 +107,7 @@ else:
         sys.stderr.write("fleet: existing settings.json is not valid JSON/JSONC; refusing to overwrite.\n")
         sys.exit(2)
 if not isinstance(d,dict): d={}
-ss={"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"}]}
+ss={"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"},{"type":"command","command":".fleet/bin/wake_nudge.sh"}]}
 pre={"matcher":"Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":".fleet/bin/guard.sh"}]}
 post={"matcher":"*","hooks":[{"type":"command","command":".fleet/bin/heartbeat.sh"}]}
 ups={"hooks":[{"type":"command","command":".fleet/bin/awareness.sh"}]}
@@ -227,6 +227,8 @@ registered agent. To work in parallel without clobbering each other:
   If blocked, pick another area or message them: `.fleet/bin/fleet.sh msg <agent> "..."`
 - **Release** when done: `.fleet/bin/fleet.sh release <path>`
 - Read messages: `.fleet/bin/fleet.sh inbox`
+- **Get woken by pings:** arm your inbox watcher once — run `.fleet/bin/fleet.sh wake-cmd` and hand
+  its command to the Monitor tool (persistent). After that, a `msg` to you re-invokes you to act on it.
 
 Your identity is auto-detected — just run the commands.
 <!-- FLEET:END -->

@@ -4,6 +4,30 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-09-03
+
+### Added
+- **Agent-to-agent wake — a `msg` can WAKE the recipient.** A file-append DM can't wake an idle agent (it's blocked
+  on its stdin pipe, not polling the inbox). Two complementary mechanisms close the loop:
+  - **Live windows:** `fleet.sh wake-cmd` prints a one-line inbox watcher to hand to the harness Monitor tool; a new
+    DM then emits a `FLEET-PING` that re-invokes the window to act. A SessionStart hook (`wake_nudge.sh`, wired by
+    `init`) reminds each agent to arm it once.
+  - **Closed windows:** `wake-dispatcher.sh` (OPTIONAL, opt-in — never installed or started by `init`)
+    headless-resumes an offline session (`claude -p --resume <uuid>`) to process its inbox. Guards: a PROCESS-liveness
+    alive-guard (never races a live transcript), per-target cooldown, rolling rate-limit, a kill-switch file,
+    cursor+`.seen` dedup, version-agnostic binary resolution, and **dry-run by default**. `--selftest` proves every
+    guard bites. Ships with a launchd template (`com.fleet.wake-dispatcher.plist.template`).
+
+### Changed
+- **`SessionEnd` preserves UNREAD DMs (`deregister.sh`).** Previously the inbox was deleted unconditionally on window
+  close, so a DM to a window that closed first was lost — making a handoff to a closed session impossible. Now the
+  inbox + agent record are kept when unread messages remain (line count > `.seen`) so the dispatcher can wake the
+  session to process them; a fully-read inbox is still cleaned up.
+
+### Fixed
+- **CI: `selftest-collateral.sh` shellcheck SC2034** — sandbox globals consumed by sourced `lib.sh` are now
+  `export`ed, restoring a green `main` (the 0.4.0 push had landed red).
+
 ## [0.4.0] — 2026-09-02
 
 ### Added

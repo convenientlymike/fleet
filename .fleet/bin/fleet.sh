@@ -289,6 +289,22 @@ cmd_worktree() {
   esac
 }
 
+# ---- wake-cmd: print the canonical inbox-watch command for the Monitor tool ----
+# A file-append DM (cmd_msg) does NOT wake an idle agent — an idle claude process is blocked reading its own
+# stdin pipe (owned by the editor/extension), not polling any file. The ONLY in-editor way to make an inbound
+# DM wake a LIVE session is for that session to run a background watcher whose stdout re-invokes the model —
+# i.e. the harness Monitor tool. This prints the exact command to hand to Monitor (persistent:true): it emits one
+# 'FLEET-PING' line per NEW inbox message, re-invoking you so you can `fleet.sh inbox` and act. (For sessions that
+# are NOT running, see wake-dispatcher.sh — it headless-resumes them; the two cover live + offline respectively.)
+cmd_wake_cmd() {
+  local ibox="$INBOX_DIR/$SELF_SID.jsonl"
+  cat <<EOF
+# Hand the ONE command below to the Monitor tool (persistent:true, timeout_ms:3600000). It watches YOUR inbox
+# and emits a FLEET-PING per new message, which wakes you. Then run: .fleet/bin/fleet.sh inbox  and act.
+inbox="$ibox"; prev=0; [ -f "\$inbox" ] && prev=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); prev=\${prev:-0}; while true; do cur=0; [ -f "\$inbox" ] && cur=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); cur=\${cur:-0}; if [ "\$cur" -gt "\$prev" ]; then tail -n +\$((prev+1)) "\$inbox" 2>/dev/null | sed 's/^/FLEET-PING /'; prev=\$cur; fi; sleep 15; done
+EOF
+}
+
 usage() {
   cat <<EOF
 Fleet — multi-window Claude Code coordination.  identity: \$CLAUDE_CODE_SESSION_ID (auto)
@@ -299,6 +315,7 @@ Fleet — multi-window Claude Code coordination.  identity: \$CLAUDE_CODE_SESSIO
   fleet.sh whoami                    your agent label + session
   fleet.sh msg <agent-N|short|all> "<msg>"   message another agent
   fleet.sh inbox                     read your messages (marks them read)
+  fleet.sh wake-cmd                  print the Monitor-tool command that wakes you on a new DM (offline: wake-dispatcher.sh)
   fleet.sh board [list|post "<t>"]   shared activity feed
   fleet.sh status | doctor           health + config
   fleet.sh worktree enable|new <name>|list   git-worktree isolation mode
@@ -345,6 +362,7 @@ case "$CMD" in
   whoami)   require_id; cmd_whoami ;;
   msg)      require_id; cmd_msg "$@" ;;
   inbox)    require_id; cmd_inbox ;;
+  wake-cmd) require_id; cmd_wake_cmd "$@" ;;
   board)    cmd_board "$@" ;;
   status)   cmd_status ;;
   doctor)   cmd_doctor ;;
