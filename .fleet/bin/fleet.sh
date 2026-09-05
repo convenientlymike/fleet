@@ -298,11 +298,39 @@ cmd_worktree() {
 # are NOT running, see wake-dispatcher.sh — it headless-resumes them; the two cover live + offline respectively.)
 cmd_wake_cmd() {
   local ibox="$INBOX_DIR/$SELF_SID.jsonl"
+  local mondir="$STATE_DIR/wake"
+  local mon="$mondir/$SELF_SID.monitor"
   cat <<EOF
-# Hand the ONE command below to the Monitor tool (persistent:true, timeout_ms:3600000). It watches YOUR inbox
-# and emits a FLEET-PING per new message, which wakes you. Then run: .fleet/bin/fleet.sh inbox  and act.
-inbox="$ibox"; prev=0; [ -f "\$inbox" ] && prev=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); prev=\${prev:-0}; while true; do cur=0; [ -f "\$inbox" ] && cur=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); cur=\${cur:-0}; if [ "\$cur" -gt "\$prev" ]; then tail -n +\$((prev+1)) "\$inbox" 2>/dev/null | sed 's/^/FLEET-PING /'; prev=\$cur; fi; sleep 15; done
+# Hand the ONE command below to the Monitor tool (persistent:true, timeout_ms:3600000). It watches YOUR inbox and
+# emits a FLEET-PING per new message (which wakes you) AND drops a liveness breadcrumb each tick so the coordinator
+# can see you're actually monitored ('fleet.sh monitors'). Then run: .fleet/bin/fleet.sh inbox  and act.
+inbox="$ibox"; mon="$mon"; mkdir -p "$mondir" 2>/dev/null; prev=0; [ -f "\$inbox" ] && prev=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); prev=\${prev:-0}; while true; do : > "\$mon" 2>/dev/null; cur=0; [ -f "\$inbox" ] && cur=\$(wc -l < "\$inbox" 2>/dev/null | tr -d ' '); cur=\${cur:-0}; if [ "\$cur" -gt "\$prev" ]; then tail -n +\$((prev+1)) "\$inbox" 2>/dev/null | sed 's/^/FLEET-PING /'; prev=\$cur; fi; sleep 15; done
 EOF
+}
+
+# monitors — coordinator readout: which agents are MONITORED / UNMONITORED (live but will MISS wakes) / CLOSED,
+# with unread counts. Ranks UNMONITORED-with-unread first (most urgent to prompt). Turns the silent "an agent
+# never armed its watcher, so DMs wait" failure into a signal the operator can act on.
+cmd_monitors() {
+  [ -d "$AGENTS_DIR" ] || { echo "(no agents registered)"; return 0; }
+  local f sid lbl sh state un pri note rows="" flagged=0
+  for f in "$AGENTS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .json)"
+    lbl="$(json_field_file "$f" agent)"; [ -z "$lbl" ] && lbl="agent-?"
+    sh="$(short_sid "$sid")"; state="$(agent_liveness_state "$sid")"; un="$(unread_count "$sid")"
+    case "$state" in UNMONITORED) { [ "$un" -gt 0 ] && pri=0 || pri=1; } ;; MONITORED) pri=2 ;; *) pri=3 ;; esac
+    note=""; [ "$state" = UNMONITORED ] && { note="⚠ will miss wakes"; flagged=1; }
+    rows="$rows$pri|$lbl|$sh|$state|$un|$note
+"
+  done
+  printf '%-9s %-10s %-13s %-7s %s\n' AGENT SHORT STATE UNREAD NOTE
+  printf '%s' "$rows" | sort -t'|' -k1,1n | while IFS='|' read -r _pri lbl sh state un note; do
+    [ -z "$lbl" ] && continue
+    printf '%-9s %-10s %-13s %-7s %s\n' "$lbl" "$sh" "$state" "$un" "$note"
+  done
+  [ "$flagged" -eq 1 ] && echo "  (UNMONITORED = live but no armed watcher; DMs still DELIVER on its next turn, but it won't proactively WAKE. Prompt it, or have it run: .fleet/bin/fleet.sh wake-cmd)"
+  return 0
 }
 
 usage() {
@@ -312,6 +340,7 @@ Fleet — multi-window Claude Code coordination.  identity: \$CLAUDE_CODE_SESSIO
   fleet.sh claim <path> [intent]     reserve a file/dir so other windows can't edit it
   fleet.sh release [--force] <path>  release your claim
   fleet.sh roster                    who is live and what they hold
+  fleet.sh monitors                  who is MONITORED / UNMONITORED (will miss wakes) / closed + unread counts
   fleet.sh whoami                    your agent label + session
   fleet.sh msg <agent-N|short|all> "<msg>"   message another agent
   fleet.sh inbox                     read your messages (marks them read)
@@ -363,6 +392,7 @@ case "$CMD" in
   msg)      require_id; cmd_msg "$@" ;;
   inbox)    require_id; cmd_inbox ;;
   wake-cmd) require_id; cmd_wake_cmd "$@" ;;
+  monitors) cmd_monitors ;;
   board)    cmd_board "$@" ;;
   status)   cmd_status ;;
   doctor)   cmd_doctor ;;

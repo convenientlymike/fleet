@@ -183,6 +183,24 @@ if [ -f "$S_JSON" ]; then
   fi
 fi
 
+# ── LIVENESS (Layer 4 visibility): agent_liveness_state classifies MONITORED (fresh breadcrumb) / UNMONITORED
+#    (agent-file fresh but no watcher — the silent-miss case) / CLOSED. Neg-controls prove each transition bites.
+lvt="$(mktemp -d)"
+(
+  . "$DIR/lib.sh" 2>/dev/null
+  export FLEET_STATE_DIR="$lvt/state"; STATE_DIR="$FLEET_STATE_DIR"; AGENTS_DIR="$STATE_DIR/agents"; INBOX_DIR="$STATE_DIR/inbox"
+  mkdir -p "$AGENTS_DIR" "$INBOX_DIR" "$STATE_DIR/wake"
+  sid="lvsid1"; af="$AGENTS_DIR/$sid.json"
+  printf '{"session_id":"%s","agent":"agent-9"}\n' "$sid" > "$af"     # fresh agent file = active session
+  [ "$(agent_liveness_state "$sid")" = "UNMONITORED" ] && pass "LIVENESS: active agent + no watcher → UNMONITORED (silent-miss surfaced)" || fail "LIVENESS: expected UNMONITORED, got $(agent_liveness_state "$sid")"
+  : > "$STATE_DIR/wake/$sid.monitor"                                  # watcher breadcrumb (fresh)
+  [ "$(agent_liveness_state "$sid")" = "MONITORED" ] && pass "LIVENESS: fresh watcher breadcrumb → MONITORED" || fail "LIVENESS: expected MONITORED, got $(agent_liveness_state "$sid")"
+  rm -f "$STATE_DIR/wake/$sid.monitor"; touch -t 200001010000 "$af"  # reaped/ancient + no breadcrumb
+  [ "$(agent_liveness_state "$sid")" = "CLOSED" ] && pass "LIVENESS neg-control: ancient agent + no breadcrumb → CLOSED" || fail "LIVENESS neg-control: expected CLOSED, got $(agent_liveness_state "$sid")"
+  [ "$ok" = 1 ]
+) || ok=0
+rm -rf "$lvt" 2>/dev/null || true
+
 echo
 [ "$ok" = 1 ] && { echo "selftest-collateral: OK — every collateral fix BITES + no over-block"; exit 0; }
 echo "selftest-collateral: FAIL — a collateral fix regressed"; exit 1

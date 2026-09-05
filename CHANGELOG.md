@@ -4,6 +4,21 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-09-05
+
+### Added
+- **`fleet.sh monitors` — coordinator/operator visibility into who will silently miss wakes.** Classifies every
+  agent **MONITORED** / **UNMONITORED** (live but no armed watcher → won't proactively wake) / **CLOSED**, with
+  unread counts, ranked unmonitored-with-unread first. Turns the invisible "an agent never armed its Monitor, so
+  DMs wait" failure into an actionable signal. Backed by a watcher **liveness breadcrumb** — the `wake-cmd` watcher
+  now touches `$STATE_DIR/wake/<sid>.monitor` each tick, giving robust, pgrep-free liveness that also catches a
+  *wedged* watcher. New lib.sh: `monitor_fresh`, `agent_liveness_state`, `unread_count`.
+
+### Changed
+- **`awareness.sh` re-nudges to arm the watcher** when it isn't running (`⚠ FLEET WAKE NOT ARMED`), every turn until
+  armed — a lapse self-heals. Detection is a MECHANISM (breadcrumb freshness); arming stays COMPLIANCE (a hook
+  cannot call the Monitor tool — the irreducible platform limit).
+
 ## [0.7.0] — 2026-09-05
 
 ### Added
