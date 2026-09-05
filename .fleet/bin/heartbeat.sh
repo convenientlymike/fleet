@@ -33,4 +33,26 @@ SID="$(json_field_str "$INPUT" session_id 2>/dev/null)"
 # events — a read/think-heavy or long-single-tool turn). The C0a tail-fix so an actively-working window can no
 # longer stay invisible until its next prompt. Fail-open — never blocks the tool.
 ensure_self_registered "$SID"
+
+# ---- DM DELIVERY on the autonomous-turn surface (the reliability backbone's second half) -----------
+# awareness.sh delivers on UserPromptSubmit (prompt-driven turns). But a long autonomous turn submits ONE prompt
+# then runs many tools for minutes — a DM arriving mid-turn would sit unseen until the NEXT prompt (maybe never).
+# PostToolUse fires on every tool, so fold delivery in here too → an ACTIVE agent gets every DM before its next
+# step, ZERO arming required. HARD FACT (verified against the hooks docs): bare stdout is NOT injected on
+# PostToolUse — context MUST go via hookSpecificOutput.additionalContext JSON. Throttle re-emit (a 50-tool burst
+# must not repeat the banner) with a mtime window; the throttle guards NOISE, never CORRECTNESS — .seen advances
+# ONLY when we actually emit, so a throttled tick can never drop a DM. Fail-open; never blocks the tool.
+fleet_unread_scan "$SID"
+if [ "${FLEET_UNREAD_N:-0}" -gt 0 ]; then
+  _pull_ts="$INBOX_DIR/$SID.pullts"; _win="${FLEET_PULL_THROTTLE_S:-45}"
+  _now="$(now_epoch)"; _last=0
+  [ -f "$_pull_ts" ] && _last="$(mtime_epoch "$_pull_ts" 2>/dev/null)"; case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+  if [ $(( _now - _last )) -ge "$_win" ]; then
+    _ctx="⚠ FLEET DM (${FLEET_UNREAD_N} unread) — read + act on it before continuing:
+${FLEET_UNREAD_BLOCK}"
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$(json_escape "$_ctx")"
+    _fleet_seen_set "$SID" "$FLEET_INBOX_TOTAL"    # advance ONLY after emitting (never on a throttled/no-op tick)
+    : > "$_pull_ts" 2>/dev/null || true
+  fi
+fi
 exit 0

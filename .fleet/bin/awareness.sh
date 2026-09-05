@@ -73,34 +73,9 @@ for sid in $(live_sids); do
 done
 
 # ---- unread messages -------------------------------------------------------
-IBOX="$INBOX_DIR/$SID.jsonl"
-SEEN_FILE="$INBOX_DIR/$SID.seen"
-NEWMSGS=""
-NEW_COUNT=0
-if [ -f "$IBOX" ]; then
-  total="$(wc -l < "$IBOX" 2>/dev/null | tr -d ' ')"; [ -z "$total" ] && total=0
-  seen=0; [ -f "$SEEN_FILE" ] && seen="$(tr -d ' ' < "$SEEN_FILE" 2>/dev/null)"; [ -z "$seen" ] && seen=0
-  if [ "$total" -gt "$seen" ]; then
-    NEW_COUNT=$(( total - seen ))
-    # print the new lines' from+body
-    line_no=0
-    while IFS= read -r line; do
-      line_no=$((line_no+1))
-      [ "$line_no" -le "$seen" ] && continue
-      frm="$(json_field_str "$line" from)"
-      body="$(json_field_str "$line" body)"
-      ref="$(json_field_str "$line" ref_path)"
-      if [ -n "$ref" ]; then
-        NEWMSGS="$NEWMSGS  - from ${frm:-?} re $ref: $body
-"
-      else
-        NEWMSGS="$NEWMSGS  - from ${frm:-?}: $body
-"
-      fi
-    done < "$IBOX"
-    printf '%s' "$total" > "$SEEN_FILE" 2>/dev/null || true
-  fi
-fi
+fleet_unread_scan "$SID"
+NEW_COUNT="$FLEET_UNREAD_N"
+NEWMSGS="$FLEET_UNREAD_BLOCK"
 
 # ---- quiet on solo + no messages -------------------------------------------
 if [ "$OTHER_COUNT" -eq 0 ] && [ "$NEW_COUNT" -eq 0 ]; then
@@ -115,6 +90,7 @@ fi
 if [ "$NEW_COUNT" -gt 0 ]; then
   printf 'New messages (%s):\n' "$NEW_COUNT"
   printf '%s' "$NEWMSGS"
+  _fleet_seen_set "$SID" "$FLEET_INBOX_TOTAL"   # advance ONLY after emit (UserPromptSubmit stdout IS injected)
 fi
 printf 'Protocol: claim before editing shared areas -> .fleet/bin/fleet.sh claim <path> "<why>". Edits to a file another live agent holds are BLOCKED by the harness. See the roster anytime: .fleet/bin/fleet.sh roster\n'
 exit 0
