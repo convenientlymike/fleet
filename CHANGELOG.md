@@ -4,6 +4,22 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-05
+
+### Added
+- **`fleet-agent-map`** — autonomously answer "who is each agent?" without hardcoding. Agents close, get recreated
+  (a new `agent-N` inherits a lane), and change focus over time, so a static number→role list rots. This derives it
+  live: **branch** from each agent's `cwd` record (authoritative), **role~** keyword-classified from the agent's
+  RECENT transcript activity (a hint — re-confirm when it matters), plus the latest activity line. Run it any time
+  instead of remembering who's who.
+
+### Changed
+- **`wake_nudge` now SURFACES unread DMs at SessionStart** — not just "arm your watcher". It computes
+  `unread = inbox line-count − <SID>.seen` and prints `⚠ FLEET: N UNREAD DM(s)` + a 3-line preview when N>0, so a
+  new/resumed session sees its backlog immediately (worktree-safe via `--git-common-dir`; all-defensive, never
+  breaks the session). Complements the live-Monitor wake from 0.5.0. **Note:** a DM still only *wakes* an agent that
+  has armed its Monitor — for a live-but-unmonitored window the DM queues until its next turn.
+
 ## [0.5.0] — 2026-09-03
 
 ### Added

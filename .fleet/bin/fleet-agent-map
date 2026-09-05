@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# fleet-agent-map — AUTONOMOUSLY resolve who each fleet agent is, live. NEVER hardcode agent→role.
+#
+# WHY (operator-engraved 2026-09-05): agents close + get recreated (a new agent-N takes over a lane) and CHANGE
+# FOCUS over time, so a static "agent-2 = frontend" list rots and misleads. This derives everything from live state:
+#   • BRANCH  — from the fleet agent record's `cwd` → `git branch` (always accurate).
+#   • ROLE    — keyword-classified from the agent's RECENT transcript activity (current focus, not its first prompt).
+#   • ACTIVITY— the agent's latest substantive line, so you see what it's doing NOW.
+# Run it whenever you need "who is agent-N" — do not remember, re-derive.
+#
+# Usage: fleet-agent-map [--repo <path>] [--active-hours N] [--json]
+set -u
+REPO="$(pwd)"; ACTIVE_HOURS=0; AS_JSON=0
+while [ $# -gt 0 ]; do case "$1" in
+  --repo) REPO="$2"; shift 2;;
+  --active-hours) ACTIVE_HOURS="$2"; shift 2;;
+  --json) AS_JSON=1; shift;;
+  *) echo "unknown arg: $1" >&2; exit 2;;
+esac; done
+
+COMMON="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+AGENTS_DIR="${COMMON}/fleet/agents"
+[ -d "$AGENTS_DIR" ] || { echo "no fleet agents dir at $AGENTS_DIR (not a fleet repo?)" >&2; exit 1; }
+
+AGENTS_DIR="$AGENTS_DIR" ACTIVE_HOURS="$ACTIVE_HOURS" AS_JSON="$AS_JSON" python3 - <<'PY'
+import json, glob, os, re, subprocess, datetime
+AGENTS_DIR=os.environ["AGENTS_DIR"]; ACTIVE_HOURS=int(os.environ["ACTIVE_HOURS"]); AS_JSON=os.environ["AS_JSON"]=="1"
+PROJ=os.path.expanduser("~/.claude/projects")
+def slug(p): return re.sub(r'[^A-Za-z0-9]','-',p)
+
+# Role keyword sets — classify by CURRENT focus. Extend freely; this is a hint, not gospel.
+KW={
+ 'frontend':['frontend','front-end','front end','immersive','art sweep','sprite','palette','render test','component','dashboard','tailwind','tsx','ui/','useGame','feature card','emblem','icon'],
+ 'RE-dev':['reverse','il2cpp','dump.cs','native read','offset','protobuf','rpc','hook','frida','decode','write-spec','sendrpc','static dispatch','gcchoose','byproof'],
+ 'farms':['farm','farming',' avd','emulator','account','onboard','automation','daemon','spoof','fleet of','device pool','provision'],
+ 'coordinator':['push/merge','fleet-sync','land verified','origin==local','push-main','pre-push gate','coordinator'],
+}
+def classify(text):
+    t=text.lower()
+    sc={k:sum(t.count(w) for w in ws) for k,ws in KW.items()}
+    best=max(sc,key=sc.get) if any(sc.values()) else '?'
+    return best, sc
+
+def recent_text_and_activity(cwd, sid, tail_lines=500):
+    tpath=f"{PROJ}/{slug(cwd)}/{sid}.jsonl"
+    if not os.path.exists(tpath): return "", "(no transcript)"
+    try:
+        lines=subprocess.run(["tail","-n",str(tail_lines),tpath],capture_output=True,text=True).stdout.splitlines()
+    except Exception:
+        lines=open(tpath).readlines()[-tail_lines:]
+    buf=[]; last_user=""
+    for l in lines:
+        try:
+            d=json.loads(l); ty=d.get("type")
+            if ty in ("user","assistant"):
+                c=d.get("message",{}).get("content") or d.get("content") or ""
+                if isinstance(c,list): c=" ".join(x.get("text","") for x in c if isinstance(x,dict))
+                c=str(c)
+                buf.append(c)
+                if ty=="user" and len(c)>30 and not c.startswith("<") and "tool_result" not in c[:40]:
+                    last_user=re.sub(r"\s+"," ",c)[:80]
+        except Exception: pass
+    return " ".join(buf), (last_user or "(recent tool/continuation)")
+
+now=datetime.datetime.now(datetime.timezone.utc)
+rows=[]
+for f in glob.glob(f"{AGENTS_DIR}/*.json"):
+    try: d=json.load(open(f))
+    except Exception: continue
+    cwd=d.get("cwd",""); ag=d.get("agent","?"); sid=d.get("session_id",""); seen=d.get("last_seen","")
+    if ACTIVE_HOURS>0 and seen:
+        try:
+            dt=datetime.datetime.fromisoformat(seen.replace("Z","+00:00"))
+            if (now-dt).total_seconds() > ACTIVE_HOURS*3600: continue
+        except Exception: pass
+    br=subprocess.run(["git","-C",cwd,"branch","--show-current"],capture_output=True,text=True).stdout.strip() if os.path.isdir(cwd) else "?"
+    text,activity=recent_text_and_activity(cwd,sid)
+    role,sc=classify(text)
+    rows.append({"agent":ag,"branch":br or "(detached)","role":role,"scores":sc,"last_seen":seen,"activity":activity,"cwd":cwd})
+rows.sort(key=lambda r: r["last_seen"], reverse=True)
+
+if AS_JSON:
+    print(json.dumps(rows,indent=2)); raise SystemExit
+print(f"{'AGENT':<8}{'BRANCH':<16}{'ROLE~':<11}{'LAST-SEEN':<22}ACTIVITY (recent)")
+for r in rows:
+    print(f"{r['agent']:<8}{r['branch']:<16}{r['role']:<11}{r['last_seen']:<22}{r['activity']}")
+print("\nROLE~ = keyword-classified from RECENT activity (a hint; re-confirm when it matters). BRANCH is authoritative.")
+PY
