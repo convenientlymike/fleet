@@ -235,6 +235,49 @@ live_sids() {
 
 count_live() { live_sids | grep -c . ; }
 
+# ---- inbox delivery (canonical single-source; used by awareness.sh + heartbeat.sh) ------------------
+# One codepath for reading/formatting unread DMs and advancing the .seen cursor, so the UserPromptSubmit
+# backbone (awareness.sh — plain-stdout inject) and the PostToolUse fold (heartbeat.sh — additionalContext-JSON
+# inject) never diverge. The KEY discipline: scan does NOT advance .seen; the caller advances only AFTER it has
+# actually emitted, so a non-injecting channel can never silently drop a DM (the §4.1 trap).
+
+# _fleet_seen_set <sid> <n> — atomically set the .seen cursor to n, monotonic (NEVER regress: a racing writer
+# can't skip a DM by lowering seen). tmp+mv = crash-safe (a torn write never corrupts .seen).
+_fleet_seen_set() {
+  local sid="$1" n="$2" sf cur tmp
+  sf="$INBOX_DIR/$sid.seen"
+  cur=0; [ -f "$sf" ] && cur="$(tr -d ' \n' < "$sf" 2>/dev/null)"; case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$n" -le "$cur" ] && return 0
+  tmp="$sf.tmp.$$"
+  printf '%s' "$n" > "$tmp" 2>/dev/null && mv -f "$tmp" "$sf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
+# fleet_unread_scan <sid> — set globals FLEET_UNREAD_N (count), FLEET_INBOX_TOTAL (inbox line count), and
+# FLEET_UNREAD_BLOCK (formatted "  - from X: body" lines for the DMs past .seen). Sets via globals (NOT stdout)
+# so a caller can use it WITHOUT a subshell losing the counts. Does NOT touch .seen.
+# shellcheck disable=SC2034  # FLEET_UNREAD_N/FLEET_INBOX_TOTAL/FLEET_UNREAD_BLOCK are globals read cross-file by awareness.sh + heartbeat.sh
+fleet_unread_scan() {
+  local sid="$1" ibox total seen line_no line frm body ref
+  FLEET_UNREAD_N=0; FLEET_INBOX_TOTAL=0; FLEET_UNREAD_BLOCK=""
+  ibox="$INBOX_DIR/$sid.jsonl"; [ -f "$ibox" ] || return 0
+  total="$(wc -l < "$ibox" 2>/dev/null | tr -d ' ')"; case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  FLEET_INBOX_TOTAL="$total"
+  seen=0; [ -f "$INBOX_DIR/$sid.seen" ] && seen="$(tr -d ' \n' < "$INBOX_DIR/$sid.seen" 2>/dev/null)"
+  case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
+  [ "$total" -gt "$seen" ] || return 0
+  FLEET_UNREAD_N=$(( total - seen ))
+  line_no=0
+  while IFS= read -r line; do
+    line_no=$((line_no+1)); [ "$line_no" -le "$seen" ] && continue
+    frm="$(json_field_str "$line" from)"; body="$(json_field_str "$line" body)"; ref="$(json_field_str "$line" ref_path)"
+    if [ -n "$ref" ]; then FLEET_UNREAD_BLOCK="$FLEET_UNREAD_BLOCK  - from ${frm:-?} re $ref: $body
+"
+    else FLEET_UNREAD_BLOCK="$FLEET_UNREAD_BLOCK  - from ${frm:-?}: $body
+"; fi
+  done < "$ibox"
+}
+
 # count_claims — number of active claim lock dirs (glob-based; handles odd names).
 count_claims() {
   local n=0 d

@@ -147,6 +147,42 @@ tmpd="$(mktemp -d)"
 ) || ok=0
 rm -rf "$tmpd" 2>/dev/null || true
 
+# ── DELIVERY: heartbeat.sh (PostToolUse) surfaces unread DMs via additionalContext JSON; .seen advances only on emit
+#    (the reliability-backbone forcing function — bare PostToolUse stdout is NOT injected, so this proves the JSON path)
+dlv="$(mktemp -d)"
+(
+  export FLEET_STATE_DIR="$dlv/state"; mkdir -p "$FLEET_STATE_DIR/inbox" "$FLEET_STATE_DIR/agents"
+  sid="dlvsid1"
+  printf '{"from":"agent-2","body":"DELIVERY NONCE 4f9a"}\n' > "$FLEET_STATE_DIR/inbox/$sid.jsonl"
+  out="$(printf '{"session_id":"%s"}' "$sid" | FLEET_STATE_DIR="$FLEET_STATE_DIR" CLAUDE_CODE_SESSION_ID="$sid" bash "$DIR/heartbeat.sh" 2>/dev/null)"
+  if printf '%s' "$out" | grep -q 'DELIVERY NONCE 4f9a' && printf '%s' "$out" | grep -q 'additionalContext' \
+     && [ "$(cat "$FLEET_STATE_DIR/inbox/$sid.seen" 2>/dev/null)" = "1" ]; then
+    pass "DELIVERY: heartbeat surfaces an unread DM via additionalContext JSON + advances seen"
+  else
+    fail "DELIVERY: heartbeat did NOT inject the DM / advance seen (out=$out)"
+  fi
+  # neg-control: no new DM → silent, seen unchanged (proves it only injects real new DMs)
+  out2="$(printf '{"session_id":"%s"}' "$sid" | FLEET_STATE_DIR="$FLEET_STATE_DIR" FLEET_PULL_THROTTLE_S=0 CLAUDE_CODE_SESSION_ID="$sid" bash "$DIR/heartbeat.sh" 2>/dev/null)"
+  if [ -z "$out2" ] && [ "$(cat "$FLEET_STATE_DIR/inbox/$sid.seen")" = "1" ]; then
+    pass "DELIVERY neg-control: no new DM → silent, seen unchanged"
+  else
+    fail "DELIVERY neg-control: re-emitted or moved seen with nothing new (out2=$out2)"
+  fi
+  [ "$ok" = 1 ]
+) || ok=0
+rm -rf "$dlv" 2>/dev/null || true
+
+# ── SETTINGS DRIFT: the checked-in settings.json MUST wire the delivery/wake hooks (the exact class that drifted
+#    2026-09-05 — heartbeat + wake nudges were absent). Bites if a hook the installer wires is missing from settings.
+S_JSON="$DIR/../../.claude/settings.json"
+if [ -f "$S_JSON" ]; then
+  if grep -q 'heartbeat.sh' "$S_JSON" && grep -q 'wake_nudge.sh' "$S_JSON" && grep -q 'awareness.sh' "$S_JSON" && grep -q 'multiwindow_nudge.sh' "$S_JSON"; then
+    pass "SETTINGS: checked-in settings.json wires the delivery/wake hooks (heartbeat + awareness + wake_nudge + multiwindow)"
+  else
+    fail "SETTINGS DRIFT: checked-in settings.json is MISSING a delivery/wake hook the installer wires (heartbeat/awareness/wake_nudge/multiwindow)"
+  fi
+fi
+
 echo
 [ "$ok" = 1 ] && { echo "selftest-collateral: OK — every collateral fix BITES + no over-block"; exit 0; }
 echo "selftest-collateral: FAIL — a collateral fix regressed"; exit 1

@@ -4,6 +4,30 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-09-05
+
+### Added
+- **DM delivery is now a MECHANISM, not compliance.** Folded unread-DM delivery into `heartbeat.sh`
+  (PostToolUse) via `hookSpecificOutput.additionalContext` JSON, so an **active** agent — submitting a prompt OR
+  running any tool — receives every unread DM **before its next step, with zero arming, zero daemon, zero tokens.**
+  `awareness.sh` (UserPromptSubmit, plain stdout) covers prompt-driven turns; `heartbeat.sh` covers long autonomous
+  tool turns. Together: **no unread DM survives a turn boundary on an active agent.** (Proactively *waking* an
+  idle window stays best-effort via the Monitor — a hook physically cannot arm it; the pull *delivers* on the next
+  turn, it does not *wake*. Bare PostToolUse stdout is NOT injected — the `additionalContext` JSON is required and
+  verified against the hooks docs.)
+
+### Changed
+- **Canonical inbox codepath** — `fleet_unread_scan` + `_fleet_seen_set` (lib.sh), shared by `awareness.sh` and
+  `heartbeat.sh` so the read/seen logic never diverges. `.seen` writes are now **atomic (tmp+mv) + monotonic**
+  (never regress → a racing writer can't skip a DM), and the cursor advances **only after an actual emit** (a
+  throttled or non-injecting tick can never drop a DM). PostToolUse delivery is throttled (default 45s window,
+  `FLEET_PULL_THROTTLE_S`) so a tool-heavy turn doesn't repeat the banner — throttle guards noise, never correctness.
+
+### Fixed
+- **Settings drift:** the checked-in `.claude/settings.json` was missing `PostToolUse:heartbeat` and the
+  SessionStart wake nudges — the repo dogfooded a config that didn't deliver. Regenerated to the installer-canonical
+  set; a `selftest-collateral.sh` control now bites if it drifts again.
+
 ## [0.6.0] — 2026-09-05
 
 ### Added

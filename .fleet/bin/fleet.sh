@@ -207,7 +207,7 @@ cmd_inbox() {
     local frm body ts; frm="$(json_field_str "$line" from)"; body="$(json_field_str "$line" body)"; ts="$(json_field_str "$line" ts)"
     echo "[$ts] $frm: $body"
   done < "$ibox"
-  printf '%s' "$total" > "$INBOX_DIR/$SELF_SID.seen" 2>/dev/null || true
+  _fleet_seen_set "$SELF_SID" "$total"   # atomic + monotonic (canonical helper) — no torn/regressing .seen
 }
 
 cmd_board() {
