@@ -1,10 +1,69 @@
 {
-  "permissions": { "allow": [ "Bash(.fleet/bin/fleet.sh:*)" ] },
+  "permissions": {
+    "allow": [
+      "Bash(.fleet/bin/fleet.sh:*)"
+    ]
+  },
   "hooks": {
-    "SessionStart":     [ {"hooks":[{"type":"command","command":".fleet/bin/register.sh"},{"type":"command","command":".fleet/bin/multiwindow_nudge.sh"},{"type":"command","command":".fleet/bin/wake_nudge.sh"}]} ],
-    "PreToolUse":       [ {"matcher":"Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":".fleet/bin/guard.sh"}]} ],
-    "PostToolUse":      [ {"matcher":"*","hooks":[{"type":"command","command":".fleet/bin/heartbeat.sh"}]} ],
-    "UserPromptSubmit": [ {"hooks":[{"type":"command","command":".fleet/bin/awareness.sh"}]} ],
-    "SessionEnd":       [ {"hooks":[{"type":"command","command":".fleet/bin/deregister.sh"}]} ]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".fleet/bin/register.sh"
+          },
+          {
+            "type": "command",
+            "command": ".fleet/bin/multiwindow_nudge.sh"
+          },
+          {
+            "type": "command",
+            "command": ".fleet/bin/wake_nudge.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".fleet/bin/guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".fleet/bin/heartbeat.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".fleet/bin/awareness.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".fleet/bin/deregister.sh"
+          }
+        ]
+      }
+    ]
   }
 }

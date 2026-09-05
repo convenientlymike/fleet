@@ -4,6 +4,23 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-09-05
+
+### Changed
+- **Sharpened the managed `CLAUDE.md` stanza into a compliance amplifier for the one non-automatic step.**
+  Delivery of DMs is now a mechanism (0.7.0) and visibility is automatic (0.8.0), but *arming the Monitor*
+  and *acting on a received DM* are irreducibly the agent's job — a hook cannot call the Monitor tool. The
+  stanza now (a) makes "ARM your inbox watcher first thing each session" an explicit first action with the
+  exact Monitor-tool invocation, (b) states plainly that **a FLEET DM is a task to ACT on, not an FYI**
+  (delivery is guaranteed; arming only changes latency), and (c) points to `fleet.sh monitors` for
+  reachability. Refreshed in-place via the marker-guarded stanza (`fleet.sh init`).
+
+### Fixed
+- **`init` no longer re-dirties `.claude/settings.json` on every run.** The checked-in file was in the old
+  compact one-line-array form while `init` emits pretty-printed JSON, so each `init` produced a large
+  whitespace-only diff (drift that masked real changes). Committed the installer-canonical pretty form —
+  `init` is now byte-idempotent on `settings.json` (verified: two consecutive runs produce identical output).
+
 ## [0.8.0] — 2026-09-05
 
 ### Added
