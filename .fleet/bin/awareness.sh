@@ -92,5 +92,10 @@ if [ "$NEW_COUNT" -gt 0 ]; then
   printf '%s' "$NEWMSGS"
   _fleet_seen_set "$SID" "$FLEET_INBOX_TOTAL"   # advance ONLY after emit (UserPromptSubmit stdout IS injected)
 fi
+# Re-nudge to ARM the wake watcher if it isn't running — fires every turn until armed, so a lapse self-heals.
+# Detection is a MECHANISM (breadcrumb freshness); arming stays COMPLIANCE (a hook can't call the Monitor tool).
+if ! monitor_fresh "$SID"; then
+  printf '⚠ FLEET WAKE NOT ARMED — a new DM will DELIVER on your next turn but will NOT proactively wake you. Arm it once: run  .fleet/bin/fleet.sh wake-cmd  and hand its printed command to the Monitor tool (persistent:true, timeout_ms:3600000).\n'
+fi
 printf 'Protocol: claim before editing shared areas -> .fleet/bin/fleet.sh claim <path> "<why>". Edits to a file another live agent holds are BLOCKED by the harness. See the roster anytime: .fleet/bin/fleet.sh roster\n'
 exit 0

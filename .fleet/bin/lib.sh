@@ -278,6 +278,40 @@ fleet_unread_scan() {
   done < "$ibox"
 }
 
+# ---- monitor liveness (Layer 4 visibility) ---------------------------------------------------------
+# A LIVE agent only WAKES on a DM if it armed its Monitor watcher. The watcher (fleet.sh wake-cmd) drops a
+# breadcrumb ($STATE_DIR/wake/<sid>.monitor) each tick, so a FRESH breadcrumb = watcher alive (robust + pgrep-free;
+# also catches a WEDGED watcher that stopped ticking). Lets `fleet.sh monitors` show who will silently miss wakes.
+MONITOR_FRESH_S="${FLEET_MONITOR_FRESH_S:-45}"
+
+# monitor_fresh <sid> — 0 if the watcher breadcrumb is fresh (watcher alive), else 1.
+monitor_fresh() {
+  local sid="$1" mon age
+  mon="$STATE_DIR/wake/$sid.monitor"
+  [ -f "$mon" ] || return 1
+  age=$(( $(now_epoch) - $(mtime_epoch "$mon") ))
+  [ "$age" -lt "$MONITOR_FRESH_S" ]
+}
+
+# agent_liveness_state <sid> — MONITORED | UNMONITORED | CLOSED. Fail-safe: MONITORED needs a POSITIVE fresh
+# breadcrumb (a false-UNMONITORED is a harmless nudge; a false-MONITORED would hide a real gap).
+agent_liveness_state() {
+  local sid="$1"
+  if monitor_fresh "$sid"; then printf 'MONITORED'; return 0; fi
+  if is_live "$sid"; then printf 'UNMONITORED'; return 0; fi   # agent file fresh (active) but no watcher
+  printf 'CLOSED'
+}
+
+# unread_count <sid> — inbox lines minus .seen (0 if none / no inbox).
+unread_count() {
+  local sid="$1" ibox total seen
+  ibox="$INBOX_DIR/$sid.jsonl"; [ -f "$ibox" ] || { printf 0; return 0; }
+  total="$(wc -l < "$ibox" 2>/dev/null | tr -d ' ')"; case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  seen=0; [ -f "$INBOX_DIR/$sid.seen" ] && seen="$(tr -d ' \n' < "$INBOX_DIR/$sid.seen" 2>/dev/null)"
+  case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
+  if [ "$total" -gt "$seen" ]; then printf '%s' $(( total - seen )); else printf 0; fi
+}
+
 # count_claims — number of active claim lock dirs (glob-based; handles odd names).
 count_claims() {
   local n=0 d
