@@ -21,4 +21,20 @@ else
   cp -R "$SRC/.fleet" "$TARGET/"
 fi
 chmod +x "$TARGET/.fleet/bin/"*.sh 2>/dev/null || true
+
+# Install the Fleet agent skills (/coordinator, /arm) into the project's
+# .claude/skills/ so they are invocable in Claude Code. Fleet owns these two
+# skill dirs (refreshed on every install); other skills in .claude/skills/ are
+# left untouched.
+if [ -d "$TARGET/.fleet/skills" ]; then
+  mkdir -p "$TARGET/.claude/skills"
+  for _sk in "$TARGET/.fleet/skills/"*/; do
+    [ -d "$_sk" ] || continue
+    _name="$(basename "$_sk")"
+    rm -rf "$TARGET/.claude/skills/$_name"
+    cp -R "$_sk" "$TARGET/.claude/skills/$_name"
+  done
+  echo "Installed Fleet skills -> $TARGET/.claude/skills/ (/coordinator, /arm)"
+fi
+
 exec bash "$TARGET/.fleet/bin/fleet.sh" init "$@"

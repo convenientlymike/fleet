@@ -4,6 +4,24 @@ All notable changes to Fleet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Coordinator & arm agent skills (`/coordinator`, `/arm`).** Fleet now ships two Claude
+  Code skills under `.fleet/skills/`, and `install.sh` installs them into the target
+  project's `.claude/skills/` (Fleet owns those two skill dirs; other skills untouched).
+  - **`/coordinator`** onboards a window as the dedicated git push/merge/integration
+    coordinator: fast repo + worktree + fleet-agent orientation, arms the monitor, then
+    the land loop — merge the frozen branch tip (`--no-ff`), run the pre-push gate,
+    verify the push landed with an authoritative `ls-remote` (never trust exit-0),
+    de-drift every worktree, DM the lane. Encodes the hard rules (never bypass the gate,
+    stage narrowly, freeze the SHA, never rebase `fleet/*`) + block diagnosis (real vs.
+    ephemeral-worktree false-fail, `SIGPIPE`-on-flaky-network, commit-guard).
+  - **`/arm`** — standalone (re-)arm of the wake-on-message monitor (inbox DMs +
+    new-agent + network recovery); the one-command recovery after a restart kills the
+    Monitor tool.
+  - Usage + operating model: `docs/COORDINATOR.md`; README Features + Quickstart updated.
+
 ## [0.8.1] — 2026-09-05
 
 ### Changed
