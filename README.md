@@ -82,6 +82,16 @@ same file seconds apart — silently overwriting each other's work.
   window that closes first is never lost. The dispatcher is the one part that steps beyond "just files + hooks" — it
   is never installed or started by `init`.
 
+### 🧭 Coordinator & arm skills — one command to run the integration seat
+- **`/coordinator`** onboards a window as the dedicated git push/merge/integration
+  coordinator: it orients on the repo + worktrees + live agents, arms the monitor, then
+  integrates every lane's verified work — merge the frozen branch tip, run the pre-push
+  gate, **verify the push actually landed** (authoritative `ls-remote`, never trust
+  exit-0), de-drift every worktree, and DM the lane. **`/arm`** is the one-command
+  re-arm of the wake-on-message monitor after a restart. Both ship under `.fleet/skills/`
+  and `install.sh` drops them into your project's `.claude/skills/`. Full playbook +
+  usage: [docs/COORDINATOR.md](docs/COORDINATOR.md).
+
 ## 📸 A look inside
 
 The hero above is a **real** session — three live agents, and a claimed file
@@ -132,6 +142,11 @@ like — each is now a coordinating agent.
 .fleet/bin/fleet.sh wake-cmd               # print the Monitor-tool watcher that WAKES you on a new DM
 .fleet/bin/fleet.sh worktree enable        # opt into per-window git worktrees
 ```
+
+One window drives integration — run **`/coordinator`** in it to become the git
+push/merge coordinator (it orients, arms the monitor, and lands every lane's verified
+work); **`/arm`** re-arms your wake-on-message monitor after a restart. Both are
+installed into `.claude/skills/` by `install.sh` — see [docs/COORDINATOR.md](docs/COORDINATOR.md).
 
 ## 🏗 Architecture
 
