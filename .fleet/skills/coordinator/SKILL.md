@@ -49,7 +49,7 @@ sed -n '1,80p' CLAUDE.md                             # project invariants
 grep -n 'run ' scripts/lint/run_gates.sh | head -40  # the gate list (what can block a push)
 ```
 
-Then **arm the monitor** (§4) and announce yourself on the board:
+Then **arm the monitor** (§4 — `.fleet/bin/fleet.sh wake-cmd` → the Monitor tool) and announce yourself on the board:
 `.fleet/bin/fleet.sh board post "COORDINATOR online — DM me LAND-READY <sha> when gate-green."`
 
 Know these three mechanisms before landing anything:
@@ -137,25 +137,39 @@ Run pushes as **background** commands (the gate takes minutes) and always pass
 
 ## 4. Arm the monitor (inbox + new-agent + network-recovery)
 
-Use the harness **Monitor** tool (persistent) so land-ready DMs, new-agent
-registrations, and network recovery all wake you. Resolve the inbox/agents/wake paths
-for THIS session, then:
+A coordinator is driven by EVENTS, not polling — arm ONE persistent harness **Monitor**
+so land-ready DMs, new-agent registrations, and network recovery each re-invoke you.
+
+**Base — canonical, never hand-roll the paths.** Fleet generates the watcher for you,
+correct in BOTH `local` and worktree (`git-common`) state modes, and it drops the
+liveness heartbeat that makes `fleet.sh monitors` report you **MONITORED**:
 
 ```bash
-inbox=".git/fleet/inbox/<session-id>.jsonl"; agents=".git/fleet/agents"
-prev=$(wc -l < "$inbox" 2>/dev/null); snap=$(ls "$agents"/*.json 2>/dev/null | sort); netdown=1
-while true; do
-  cur=$(wc -l < "$inbox" 2>/dev/null); cur=${cur:-0}
-  [ "$cur" -gt "${prev:-0}" ] && { tail -n +$(( ${prev:-0}+1 )) "$inbox" | sed 's/^/FLEET-PING /'; prev=$cur; }
-  new=$(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$(ls "$agents"/*.json 2>/dev/null | sort)"))
-  [ -n "$new" ] && { for f in $new; do echo "FLEET-PING NEW-AGENT $(basename "$f" .json) — run fleet-agent-map"; done; snap=$(ls "$agents"/*.json | sort); }
-  if nc -z -w3 github.com 22 >/dev/null 2>&1; then [ "$netdown" = 1 ] && echo "FLEET-PING NETWORK-RECOVERED — drain the held queue"; netdown=0; else netdown=1; fi
-  sleep 15
-done
+.fleet/bin/fleet.sh wake-cmd     # prints a ready block: sets inbox=/mon=, writes ": > $mon" each tick
 ```
 
-On `NEW-AGENT`: identify via `fleet-agent-map`, greet with the land-ready protocol, track it.
-On `NETWORK-RECOVERED`: re-verify origin authoritatively, then drain any held pushes.
+Hand the printed `while …` line to the **Monitor** tool (`persistent: true`,
+`timeout_ms: 3600000`). That alone arms inbox-DM wakes + the heartbeat.
+
+**Coordinator augmentation.** Splice two extra probes into that same loop so you also
+wake on new agents + egress recovery — reuse the `inbox`/`mon` vars wake-cmd already
+defined (do NOT re-hardcode `.git/fleet`; it's wrong in the default `local` mode, where
+state lives under `.fleet/state/`):
+
+```bash
+# before the loop (the agents dir sits beside your inbox; seed the snapshots):
+agents="${inbox%/inbox/*}/agents"; snap=$(ls "$agents"/*.json 2>/dev/null | sort); netdown=1
+# inside the loop, AFTER wake-cmd's inbox check and BEFORE `sleep` — keep its `: > "$mon"`:
+newf=$(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$(ls "$agents"/*.json 2>/dev/null | sort)")); \
+  [ -n "$newf" ] && { for f in $newf; do echo "FLEET-PING NEW-AGENT $(basename "$f" .json) — run fleet-agent-map"; done; snap=$(ls "$agents"/*.json 2>/dev/null | sort); }
+if nc -z -w3 github.com 22 >/dev/null 2>&1; then [ "$netdown" = 1 ] && echo "FLEET-PING NETWORK-RECOVERED — re-verify origin==local + drain held pushes"; netdown=0; else netdown=1; fi
+```
+
+The `: > "$mon"` heartbeat is load-bearing: without it you read **UNMONITORED** (live but
+missing wakes) even while the watcher runs. On `NEW-AGENT`: identify via `fleet-agent-map`,
+greet with the land-ready protocol, track it. On `NETWORK-RECOVERED`: re-verify origin
+authoritatively, then drain any held pushes. Re-arm after any VS Code / session restart
+(the Monitor dies on restart) — the one-command recovery is `/arm`.
 
 ---
 

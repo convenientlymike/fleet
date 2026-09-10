@@ -17,6 +17,12 @@ All notable changes to Fleet are documented here. The format is based on
     de-drift every worktree, DM the lane. Encodes the hard rules (never bypass the gate,
     stage narrowly, freeze the SHA, never rebase `fleet/*`) + block diagnosis (real vs.
     ephemeral-worktree false-fail, `SIGPIPE`-on-flaky-network, commit-guard).
+    - **Arm-the-monitor is now canonical.** `/coordinator` §4 arms via `fleet.sh wake-cmd`
+      (resolves the inbox/wake paths for BOTH `local` and worktree `git-common` state
+      modes, and writes the `: > "$mon"` liveness heartbeat so `fleet.sh monitors` reports
+      the coordinator `MONITORED`), then splices in the new-agent + network-recovery probes
+      — replacing a hand-rolled snippet that hardcoded `.git/fleet` (wrong in the default
+      `local` mode) and omitted the heartbeat (coordinator mis-read as `UNMONITORED`).
   - **`/arm`** — standalone (re-)arm of the wake-on-message monitor (inbox DMs +
     new-agent + network recovery); the one-command recovery after a restart kills the
     Monitor tool.
