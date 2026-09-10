@@ -66,3 +66,35 @@ jobs:
           # CONTROL actually bites (it needs a real git tree to mark work dirty).
           # State is isolated to a mktemp; the live fleet is never touched.
           bash .fleet/bin/selftest-brain-retire.sh
+
+  skills-install:
+    name: skills install (install.sh drops every skill into .claude/skills/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh propagates every Fleet skill
+        run: |
+          set -euo pipefail
+          target="$(mktemp -d)"
+          bash install.sh "$target"
+
+          # Every skill dir under .fleet/skills/ MUST land in the target's
+          # .claude/skills/ (this is the whole point of the install skill-copy).
+          # Dynamic over the source so a NEW skill is auto-covered.
+          rc=0
+          for src in .fleet/skills/*/; do
+            name="$(basename "$src")"
+            if [ -f "$target/.claude/skills/$name/SKILL.md" ]; then
+              echo "OK: '$name' skill propagated"
+            else
+              echo "FAIL: '$name' skill did NOT propagate to .claude/skills/"; rc=1
+            fi
+          done
+
+          # Explicit asserts for the known skills — guards the case where the glob
+          # above matched nothing (a silent no-op would otherwise read as green).
+          test -f "$target/.claude/skills/task-manager/SKILL.md"
+          test -f "$target/.claude/skills/brain/SKILL.md"
+          test -f "$target/.claude/skills/coordinator/SKILL.md"
+          test -f "$target/.claude/skills/arm/SKILL.md"
+          exit $rc

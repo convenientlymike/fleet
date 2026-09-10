@@ -7,6 +7,22 @@ All notable changes to Fleet are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **`/task-manager` agent skill.** Fleet ships a fourth dedicated-seat skill under
+  `.fleet/skills/` (installed into the target's `.claude/skills/` like the others). It
+  onboards a window as the fleet's **goals/tasks/status coordination seat** — the peer of
+  `/coordinator` (git) and `/brain` (knowledge). It keeps every agent lane's active goal
+  current, surfaces stalls + reachability gaps + stale claims + blockers from
+  `fleet.sh roster` / `monitors`, routes work with `fleet.sh msg`, keeps the board tidy, and
+  gives the operator a "who's on what / what's next / what's stuck" readout. Generic:
+  Fleet's own `roster` / `board` / `msg` / `goal` / `retire` are the substrate, and any
+  richer project-specific task board is an **optional** integration — the seat works with
+  Fleet alone.
+- **CI now proves skills install.** A new `skills-install` job runs `install.sh` into a temp
+  project and asserts **every** skill under `.fleet/skills/` propagates into
+  `.claude/skills/` (dynamic over the source, so new skills are auto-covered; explicit
+  asserts for the known skills guard a silent glob no-op). Closes the gap where the smoke
+  job only ran `fleet.sh init` (which does not copy skills), leaving skill propagation
+  untested.
 - **`/brain` agent skill + `brain` / `retire` subcommands.** Fleet ships a third skill
   under `.fleet/skills/` (installed into the target's `.claude/skills/` like the others),
   plus two new `fleet.sh` subcommands lazy-loaded from `.fleet/bin/brain-retire.sh`.
