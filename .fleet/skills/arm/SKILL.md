@@ -23,26 +23,34 @@ you don't have to poll:
 
 ## Do this on /arm
 
-**Step 1 — resolve this session's fleet paths** (identity is auto-detected):
+**Step 1 — get your session's CANONICAL paths from the resolver** (never hand-transcribe them):
 
 ```bash
-.fleet/bin/fleet.sh whoami        # confirms your session id + role
-# inbox  = .git/fleet/inbox/<session-id>.jsonl
-# agents = .git/fleet/agents
-# wake   = .git/fleet/wake/<session-id>.monitor
-ls .git/fleet/inbox/*.jsonl        # find your inbox if whoami doesn't print the path
+.fleet/bin/fleet.sh whoami        # your session id + role
+.fleet/bin/fleet.sh wake-cmd      # prints the EXACT inbox=/mon= paths for the Monitor tool
 ```
 
+⚠ **Do NOT assume `.git/fleet/...`.** The real state dir depends on config
+`state_location`: with `git-common` (worktree-shared) it is
+`$(git rev-parse --git-common-dir)/fleet` — which in a *linked worktree* is the MAIN
+repo's `.git/fleet`, **not** this worktree's `.git`, and **not** the local
+`.fleet/state`. `wake-cmd` resolves this correctly for you — copy its `inbox=` / `mon=`
+lines verbatim into Step 2. Arming from hand-typed paths silently orphans your watcher
+(it runs, but writes its breadcrumb where the fleet never looks → you read UNMONITORED
+and DMs never wake you). Step 3 catches this.
+
 **Step 2 — arm the persistent Monitor** (harness Monitor tool, `persistent: true`,
-`timeout_ms: 3600000`). Substitute your resolved `<session-id>`:
+`timeout_ms: 3600000`). Paste the `inbox=` / `mon=` lines from `wake-cmd`; the agents
+dir is derived from `mon`, so you never retype a path:
 
 ```bash
-inbox=".git/fleet/inbox/<session-id>.jsonl"
-mon=".git/fleet/wake/<session-id>.monitor"
-agents=".git/fleet/agents"
+# Paste the two lines that `fleet.sh wake-cmd` printed (authoritative paths):
+inbox="…/fleet/inbox/<session-id>.jsonl"
+mon="…/fleet/wake/<session-id>.monitor"
+agents="$(dirname "$(dirname "$mon")")/agents"      # -> <state-dir>/agents
 mkdir -p "$(dirname "$mon")" 2>/dev/null
 prev=0; [ -f "$inbox" ] && prev=$(wc -l < "$inbox" | tr -d ' '); prev=${prev:-0}
-snap=$(ls "$agents"/*.json 2>/dev/null | sort); netdown=1
+snap=$(ls "$agents"/*.json 2>/dev/null | sort); netdown=0    # seed 0 = no spurious first-tick ping
 while true; do
   : > "$mon" 2>/dev/null
   cur=0; [ -f "$inbox" ] && cur=$(wc -l < "$inbox" | tr -d ' '); cur=${cur:-0}
@@ -56,11 +64,24 @@ done
 ```
 
 Pass this as the Monitor tool's `command` with a clear `description`
-(e.g. "Fleet coordinator — inbox DMs + NEW-AGENT + NETWORK-recovery"),
+(e.g. "Fleet agent-N — inbox DMs + NEW-AGENT + NETWORK-recovery"),
 `persistent: true`, `timeout_ms: 3600000`.
 
-**Step 3 — confirm + announce.** State the monitor task id (so it can be stopped/
-re-armed later) and, if you're the coordinator, note you're in armed standby.
+**Step 3 — confirm + VERIFY (byproduct, not assumption).** State the monitor task id
+(so it can be stopped/re-armed later), then run the forcing-function check:
+
+```bash
+.fleet/bin/fleet.sh monitors      # find YOUR short id in the STATE column
+```
+
+- **MONITORED** → you are wake-capable. (Strongest proof: the next real DM fires a
+  `FLEET-PING` through your monitor.)
+- **UNMONITORED while your Monitor is alive** → your watcher is on the WRONG path
+  (classic: local `.fleet/state` while the fleet runs `git-common`). Its breadcrumb
+  lands where the fleet never looks, so DMs will NOT wake you. **Stop it (TaskStop) and
+  re-arm from `wake-cmd` output.** Do not declare armed until `monitors` shows MONITORED.
+
+If you're the coordinator, note you're in armed standby.
 
 ## Notes
 
@@ -68,7 +89,14 @@ re-armed later) and, if you're the coordinator, note you're in armed standby.
   session restart — `/arm` is the one-command recovery.
 - **One monitor per session.** If re-arming, stop the stale one first (TaskStop) so you
   don't get duplicate pings.
-- The inbox is a **local file**, so DM wake-ups keep working even when github egress is
-  down — only the `NETWORK-RECOVERED` probe depends on the network (by design).
+- **git-common gotcha — verify, don't assume (learned the hard way).** If the fleet uses
+  `state_location=git-common`, the real wake/inbox dirs are under
+  `$(git rev-parse --git-common-dir)/fleet`, NOT the local `.fleet/state` and NOT this
+  worktree's `.git/fleet`. A watcher armed from stale/hand-typed paths is alive but
+  orphaned (reads UNMONITORED; DMs deliver on your next turn but never proactively wake
+  you). Always arm from `wake-cmd` (Step 1) and confirm with `monitors` (Step 3).
+- The inbox is a **filesystem file** (not a network resource), so DM wake-ups keep
+  working even when github egress is down — only the `NETWORK-RECOVERED` probe depends on
+  the network (by design).
 - A worker (non-coordinator) agent can also `/arm` to get woken on DMs; the new-agent +
   network signals are harmless extras.
