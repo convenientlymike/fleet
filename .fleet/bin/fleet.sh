@@ -348,6 +348,10 @@ Fleet — multi-window Claude Code coordination.  identity: \$CLAUDE_CODE_SESSIO
   fleet.sh board [list|post "<t>"]   shared activity feed
   fleet.sh status | doctor           health + config
   fleet.sh worktree enable|new <name>|list   git-worktree isolation mode
+  fleet.sh retire [<agent>] [--force]   safely unload an agent from the fleet (release claims, remove record, announce)
+  fleet.sh brain <query>             ask the fleet BRAIN — an instant knowledge-oracle answer (if a memory tool is present)
+  fleet.sh brain ask "<question>"    route a deep-research question to the Brain-agent seat (DM); CLI fallback if none
+  fleet.sh brain serve|who|stand-down   take / inspect / vacate the Brain-agent seat
   fleet.sh init [--dry-run|--yes|--print-settings]   install into this project
   fleet.sh uninstall                 remove hooks + .fleet
   fleet.sh version
@@ -397,6 +401,8 @@ case "$CMD" in
   status)   cmd_status ;;
   doctor)   cmd_doctor ;;
   worktree) cmd_worktree "$@" ;;
+  retire)   require_id; . "$DIR/brain-retire.sh"; cmd_retire "$@" ;;   # safely unload an agent from the fleet
+  brain)    . "$DIR/brain-retire.sh"; cmd_brain "$@" ;;   # knowledge oracle + Brain-agent seat/router
   goal)     exec "$(dirname "$0")/goalstack" "$@" ;;   # per-window anchor goal (keyed by this window's session id)
   *) log_err "unknown command: $CMD"; usage; exit 2 ;;
 esac
