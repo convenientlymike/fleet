@@ -82,7 +82,7 @@ same file seconds apart — silently overwriting each other's work.
   window that closes first is never lost. The dispatcher is the one part that steps beyond "just files + hooks" — it
   is never installed or started by `init`.
 
-### 🧭 Coordinator, arm & brain skills — one command to run a dedicated seat
+### 🧭 Dedicated-seat skills — one command each: coordinator · arm · brain · task-manager
 - **`/coordinator`** onboards a window as the dedicated git push/merge/integration
   coordinator: it orients on the repo + worktrees + live agents, arms the monitor, then
   integrates every lane's verified work — merge the frozen branch tip, run the pre-push
@@ -92,9 +92,13 @@ same file seconds apart — silently overwriting each other's work.
   as the fleet's knowledge-oracle + research seat: peers offload questions with
   `fleet.sh brain ask "<q>"` instead of pausing their own work; the Brain answers from any
   available memory/knowledge tooling + live web research, cites + honesty-bands, and
-  captures durable findings. All three ship under `.fleet/skills/` and `install.sh` drops
-  them into your project's `.claude/skills/`. Full coordinator playbook:
-  [docs/COORDINATOR.md](docs/COORDINATOR.md).
+  captures durable findings. **`/task-manager`** onboards a window as the fleet's
+  goals/tasks/status coordination seat: it keeps every agent lane's active goal current,
+  surfaces stalls + reachability gaps + blockers from `roster`/`monitors`, routes work with
+  `fleet.sh msg`, and gives the operator a clean "who's on what / what's next / what's stuck"
+  readout (Fleet's own primitives are the substrate; any richer project board is optional).
+  All four ship under `.fleet/skills/` and `install.sh` drops them into your project's
+  `.claude/skills/`. Full coordinator playbook: [docs/COORDINATOR.md](docs/COORDINATOR.md).
 - **`fleet.sh retire [<agent>] [--force]`** safely unloads an agent from the fleet on
   demand — the sibling of the automatic `SessionEnd` deregister. It works for **any** agent
   (`agent-N` / short / session-id; no arg = yourself), releases its claims, removes its
