@@ -52,7 +52,7 @@ can't see that (the commit auto-stages *after* editing).
 - **Commit narrowly:** `git commit <your-file> …` — explicit paths build a temp index from just those paths, so a
   sibling's staged files can't ride along (and the guard passes since you only touch your own claims).
 - **Structural fix for heavy parallel work:** a **`git worktree` per session** (own index + working dir, shared
-  `.git`): `git worktree add ../phantom-<task> -b <branch>`.
+  `.git`): `git worktree add ../<repo>-<task> -b <branch>`.
 
 ## Recover by hand
 

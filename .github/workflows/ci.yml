@@ -53,3 +53,16 @@ jobs:
           else
             echo "FAIL: owner edit was blocked"; exit 1
           fi
+
+  selftest:
+    name: selftest (retire + brain — safety guards bite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the retire + brain selftest
+        run: |
+          set -euo pipefail
+          # Run from the checked-out git repo so the retire dirty-claim NEGATIVE
+          # CONTROL actually bites (it needs a real git tree to mark work dirty).
+          # State is isolated to a mktemp; the live fleet is never touched.
+          bash .fleet/bin/selftest-brain-retire.sh

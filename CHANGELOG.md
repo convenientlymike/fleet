@@ -7,6 +7,29 @@ All notable changes to Fleet are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **`/brain` agent skill + `brain` / `retire` subcommands.** Fleet ships a third skill
+  under `.fleet/skills/` (installed into the target's `.claude/skills/` like the others),
+  plus two new `fleet.sh` subcommands lazy-loaded from `.fleet/bin/brain-retire.sh`.
+  - **`/brain`** onboards a window as the fleet's knowledge-oracle + research seat: it
+    takes the Brain seat (`fleet.sh brain serve`), arms the wake-on-DM monitor, then answers
+    `fleet.sh brain ask "<q>"` questions from any available memory/knowledge tooling + live
+    web research, cites + honesty-bands, and captures durable findings. The skill is generic:
+    any memory-corpus tool is an **optional** PATH integration — `brain` degrades gracefully
+    (a clear message) when none is present, and uses only Fleet's own DM / board / state.
+  - **`fleet.sh brain <query> | ask "<q>" | serve | who | stand-down`** — the CLI oracle
+    (wraps a memory-search tool if present), deep-question routing to the Brain seat (DM, with
+    a CLI fallback when no Brain is registered), and take/inspect/vacate of the seat.
+  - **`fleet.sh retire [<agent>] [--force]`** — safely unload **any** agent from the fleet on
+    demand (the on-demand sibling of the `SessionEnd` deregister hook). Resolves the target by
+    `agent-N` / short / session-id (no arg = self), releases its claims, removes its record +
+    wake breadcrumb, vacates the Brain seat if it held it, and emits a `retire` board event.
+    Safe-by-default: **refuses** to drop a claim over uncommitted (dirty) work, or to strand a
+    foreign agent's unread DMs, without `--force` (a `--force` retire preserves a non-empty
+    inbox for durable handoff, matching `deregister.sh`).
+  - **Forcing function:** `.fleet/bin/selftest-brain-retire.sh` (hermetic, isolated state)
+    proves the happy paths AND that the safety guards BITE (retire refuses a dirty claim /
+    stranded unread DMs without `--force`; the C0b dirty-work invariant is honored). Wired
+    into CI as a dedicated `selftest` job run in a real git tree so the negative controls fire.
 - **Coordinator & arm agent skills (`/coordinator`, `/arm`).** Fleet now ships two Claude
   Code skills under `.fleet/skills/`, and `install.sh` installs them into the target
   project's `.claude/skills/` (Fleet owns those two skill dirs; other skills untouched).
