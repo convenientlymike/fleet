@@ -6,6 +6,37 @@ All notable changes to Fleet are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Duplicate `agent-N` labels under concurrent registration (the two-"agent-1" collision).**
+  `next_label` READ the agent files and the caller WROTE its own record separately, so two
+  windows registering at the same time both saw "agent-1 free" and both took it — the roster
+  showed two live `agent-1`s and a DM to `agent-1` mis-routed to whichever file enumerated
+  first. Label assignment is now an **atomic reservation**: a directory `state/labels/agent-N`
+  holding the owner `sid`, created with `mkdir` (the create-or-fail arbiter), so concurrent
+  registrants can never land the same label.
+  - **`reserve_label <sid> [preferred]`** (lib.sh) replaces `next_label` on every assignment
+    path (`register.sh`, `awareness.sh`, `ensure_self_registered`). It is **stable per session**
+    (a resume/heartbeat returns the SAME label — the reservation persists independently of the
+    heartbeat-rewritten agent file), **unique among live**, and reclaims a slot only from a
+    provably-departed owner (guarded by a grace window so a mid-registration winner — briefly
+    "not live" because its agent file is not written yet — is never stolen). `preferred` bridges
+    an upgrade/reservation-less resume so an existing `agent-N` is preserved, never a live one
+    stolen. `next_label` remains as a pure non-mutating "what's next" peek over the same
+    `LABELS_DIR` source of truth, so the two can't disagree.
+  - **Fail-loud routing.** `sid_for_target` now refuses to guess when a **label** matches more
+    than one LIVE window: `fleet.sh msg agent-1 …` exits **3** and names the candidate shorts
+    (`fleet.sh msg <short> …`) instead of silently mis-delivering. A sid/short id is always
+    unambiguous; a unique label still resolves.
+  - **Bounded + reused.** `reap` GC-removes a reservation whose owner file is fully gone (a
+    kept-stale, still-addressable window keeps its stable label); `deregister` frees a label on
+    graceful close (the unread-DM handoff path keeps it for `wake-dispatcher`). `FLEET_STATE_DIR`
+    / git-common worktree mode re-derive `LABELS_DIR` with the other state dirs, so labels
+    always land in the resolved state dir (never a stale default).
+  - **Forcing function:** `.fleet/bin/selftest-labels.sh` (hermetic, wired into CI) proves each
+    guarantee BITES with a control that fires — 8 concurrent reservations are distinct (vs a
+    naive read-then-write that collides), stable-per-session, freed-then-reused, and a duplicate
+    live label fails loud without over-triggering on a unique one.
+
 ### Added
 - **`/task-manager` agent skill.** Fleet ships a fourth dedicated-seat skill under
   `.fleet/skills/` (installed into the target's `.claude/skills/` like the others). It

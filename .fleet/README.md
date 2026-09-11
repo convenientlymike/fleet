@@ -120,6 +120,24 @@ A window is "live" iff its agent file's mtime is within `stale_after_s`. Two fai
 
 Tunables in `config.json`: `stale_after_s` (900), `agent_gc_s` (86400).
 
+## Unique agent-N labels (atomic reservation)
+
+A label is claimed via an **atomic reservation** — a directory `state/labels/agent-N` holding the owner `sid`,
+created with `mkdir` (the create-or-fail arbiter). This closes the TOCTOU race in the old `next_label`, which READ
+the agent files and let the caller WRITE its record separately: two windows registering concurrently both saw
+"agent-1 free" and both took it, so the roster showed two live `agent-1`s and a DM to `agent-1` mis-routed.
+
+- **`reserve_label <sid> [preferred]`** is the single assignment path (`register.sh` / `awareness.sh` /
+  `ensure_self_registered`). **Stable per session** (a resume/heartbeat returns the SAME label — the reservation is
+  decoupled from the heartbeat-rewritten agent file), **unique among live**, and reclaims a slot only from a
+  provably-departed owner (a grace window protects a mid-registration winner whose agent file isn't written yet).
+  `next_label` remains a pure "what's next" peek over the same `LABELS_DIR`, so the two never disagree.
+- **Fail-loud routing.** `sid_for_target` refuses to guess when a **label** matches >1 LIVE window: `fleet.sh msg
+  agent-1 …` exits `3` and names the candidate shorts; a sid/short id is always unambiguous.
+- **Bounded + reused.** `reap` GC-removes a reservation whose owner file is gone (a kept-stale window keeps its
+  label); `deregister` frees it on graceful close. Control: `bash .fleet/bin/selftest-labels.sh` (8 concurrent →
+  8 distinct, stable, reused, fail-loud — each with a control that bites).
+
 ### Worktree-per-window — the STRUCTURAL end to the shared-index races
 
 The guards above are a backstop; a shared *git index* can still be raced (two windows `git add` into the one index,

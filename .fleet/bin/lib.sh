@@ -13,6 +13,7 @@ PROJECT_ROOT="$(cd "$FLEET_DIR/.." && pwd)"
 STATE_DIR="$FLEET_DIR/state"
 AGENTS_DIR="$STATE_DIR/agents"
 CLAIMS_DIR="$STATE_DIR/claims"
+LABELS_DIR="$STATE_DIR/labels"   # atomic agent-N reservations (mkdir-mutex); the SSOT for label assignment
 INBOX_DIR="$STATE_DIR/inbox"
 BOARD_FILE="$STATE_DIR/board.jsonl"
 LEDGER_FILE="$STATE_DIR/ledger.jsonl"
@@ -43,7 +44,7 @@ mtime_epoch() {
 }
 
 ensure_state() {
-  mkdir -p "$AGENTS_DIR" "$CLAIMS_DIR" "$INBOX_DIR" 2>/dev/null || true
+  mkdir -p "$AGENTS_DIR" "$CLAIMS_DIR" "$LABELS_DIR" "$INBOX_DIR" 2>/dev/null || true
   [ -f "$BOARD_FILE" ]  || : >> "$BOARD_FILE"  2>/dev/null || true
   [ -f "$LEDGER_FILE" ] || : >> "$LEDGER_FILE" 2>/dev/null || true
 }
@@ -319,18 +320,88 @@ count_claims() {
   printf '%s\n' "$n"
 }
 
-# next_label — lowest unused agent-N among live agents.
-next_label() {
-  local used n f lbl
-  used=" "
-  for f in "$AGENTS_DIR"/*.json; do
-    [ -f "$f" ] || continue
-    lbl="$(json_field_file "$f" agent)"
-    case "$lbl" in agent-*) used="$used${lbl#agent-} " ;; esac
+# ---- agent-N label assignment (atomic, unique-among-live, stable-per-session) ----------------------------
+# A label is owned via an atomic RESERVATION: a directory LABELS_DIR/agent-N holding one file `sid`. `mkdir`
+# is the create-or-fail arbiter, so two windows registering CONCURRENTLY can never land the same label — the
+# TOCTOU race that let the old read-then-write `next_label` hand out a duplicate agent-1 (the collision that
+# put two "agent-1"s on the roster). LABELS_DIR is the single source of truth: reserve_label (assign) and
+# next_label (peek) both read it, so they can't disagree. bash-3.2-safe (no assoc arrays / mapfile).
+
+# reserve_label <sid> [preferred] — return this session's STABLE, UNIQUE agent-N, assigning one atomically if
+# needed. Idempotent per sid (a resume/heartbeat gets the SAME label). `preferred` (e.g. an existing agent
+# file's label) is honored when its slot is free — a continuity/migration bridge so an upgrade or a
+# reservation-less resume keeps the same agent-N. A slot owned by a NON-LIVE session is reclaimed for reuse.
+# _label_reclaimable <dir> <owner> <self_sid> — may we free this occupied slot? YES iff it is OUR own stale
+# reservation, OR its owner is not currently live AND the RESERVATION dir itself has aged past the grace window.
+# The grace-on-the-reservation is load-bearing for concurrent REGISTRATION: reserve_label returns BEFORE the
+# caller writes the agent file, so a just-won slot's owner is momentarily "not live" (no agent file yet). Keying
+# reclaim on the reservation's OWN age (not the owner's liveness alone) protects that in-flight winner — a racing
+# loser bumps to the next N instead of stealing the slot and collapsing everyone onto agent-1. A genuinely
+# departed owner's reservation is minutes/hours old, so it is still reclaimed promptly for reuse. (Same
+# "a no-meta claim lock is only orphaned past the grace window" rule reap uses.)
+_label_reclaimable() {
+  local d="$1" owner="$2" self="$3"
+  [ "$owner" = "$self" ] && return 0
+  [ -n "$owner" ] && is_live "$owner" && return 1
+  [ "$(( $(now_epoch) - $(mtime_epoch "$d") ))" -gt "${FLEET_LABEL_GRACE:-3}" ]
+}
+
+reserve_label() {
+  local sid="$1" preferred="${2:-}" d owner n
+  ensure_state
+  # (1) already reserved for this sid → stable across heartbeat / reap / resume
+  for d in "$LABELS_DIR"/agent-*; do
+    [ -d "$d" ] || continue
+    [ "$(cat "$d/sid" 2>/dev/null || true)" = "$sid" ] && { printf '%s' "${d##*/}"; return 0; }
   done
+  # (1b) continuity bridge: claim exactly `preferred` if it is free, ours, or a provably-dead owner's (never
+  #      steal a live or a fresh-empty/in-progress slot — fall through to (2) and take a different N instead)
+  case "$preferred" in
+    agent-*)
+      d="$LABELS_DIR/$preferred"
+      if mkdir "$d" 2>/dev/null; then printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0; fi
+      owner="$(cat "$d/sid" 2>/dev/null || true)"
+      if { [ "$owner" = "$sid" ] || { [ -n "$owner" ] && ! is_live "$owner"; }; } && rm -rf "$d" 2>/dev/null && mkdir "$d" 2>/dev/null; then
+        printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0
+      fi
+      ;;
+  esac
+  # (2) lowest free N via atomic mkdir; reclaim only a provably-free slot (dead owner / grace-expired empty)
   n=1
-  while case "$used" in *" $n "*) true;; *) false;; esac; do n=$((n+1)); done
-  printf 'agent-%s' "$n"
+  while :; do
+    d="$LABELS_DIR/agent-$n"
+    if mkdir "$d" 2>/dev/null; then printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf 'agent-%s' "$n"; return 0; fi
+    owner="$(cat "$d/sid" 2>/dev/null || true)"
+    if [ "$owner" = "$sid" ]; then printf 'agent-%s' "$n"; return 0; fi
+    if _label_reclaimable "$d" "$owner" "$sid"; then rm -rf "$d" 2>/dev/null || true; continue; fi
+    n=$((n+1))
+    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }   # FS-broken failsafe — never loop forever
+  done
+}
+
+# release_label <sid> — free this session's reservation (graceful SessionEnd / GC). Idempotent.
+release_label() {
+  local sid="$1" d
+  for d in "$LABELS_DIR"/agent-*; do
+    [ -d "$d" ] || continue
+    if [ "$(cat "$d/sid" 2>/dev/null || true)" = "$sid" ]; then rm -rf "$d" 2>/dev/null || true; fi
+  done
+}
+
+# next_label — PEEK the lowest agent-N not held by a LIVE reservation (pure / non-mutating). Assignment goes
+# through reserve_label (atomic); this is the read-only "what's next" view over the SAME LABELS_DIR source of
+# truth, so the two can never disagree. Kept for doctor/estimates; not on the assignment path.
+next_label() {
+  local d owner n
+  n=1
+  while :; do
+    d="$LABELS_DIR/agent-$n"
+    [ -d "$d" ] || { printf 'agent-%s' "$n"; return 0; }
+    owner="$(cat "$d/sid" 2>/dev/null || true)"
+    if [ -z "$owner" ] || ! is_live "$owner"; then printf 'agent-%s' "$n"; return 0; fi
+    n=$((n+1))
+    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }
+  done
 }
 
 # ensure_self_registered <sid> — touch an EXISTING agent file, or RE-CREATE a reaped one for a provably-alive
@@ -344,7 +415,7 @@ ensure_self_registered() {
   f="$(agent_file "$sid")"
   [ -f "$f" ] && { touch "$f" 2>/dev/null || true; return 0; }
   ensure_state
-  short="$(short_sid "$sid")"; label="$(next_label)"
+  short="$(short_sid "$sid")"; label="$(reserve_label "$sid")"
   local tmp="$f.tmp.$$"
   {
     printf '{'
@@ -501,6 +572,14 @@ reap() {
       board_event reap "${lbl:-?}" "$(short_sid "$sid")" "$(jstr reason stale)"
     fi
   done
+  # GC label reservations whose owner has NO agent file left (fully reaped above) so LABELS_DIR stays bounded.
+  # A kept-stale (still-addressable) session keeps BOTH its file and its reservation → its label stays stable;
+  # only a truly-GC'd (>agent_gc_s) or never-registered owner loses its slot, freeing the label for reuse.
+  for d in "$LABELS_DIR"/agent-*; do
+    [ -d "$d" ] || continue
+    owner="$(cat "$d/sid" 2>/dev/null || true)"
+    if [ -z "$owner" ] || [ ! -f "$(agent_file "$owner")" ]; then rm -rf "$d" 2>/dev/null || true; fi
+  done
   # orphaned/stale claims. A lock with a meta file is removed if its owner is
   # not live. A lock with NO meta yet is a claim in progress (mkdir won, meta
   # not written) — only treat it as orphaned if it is older than the grace
@@ -565,6 +644,7 @@ _fleet_resolve_state() {
   fi
   AGENTS_DIR="$STATE_DIR/agents"
   CLAIMS_DIR="$STATE_DIR/claims"
+  LABELS_DIR="$STATE_DIR/labels"   # MUST re-derive with the rest — else labels land in the wrong (default) dir
   INBOX_DIR="$STATE_DIR/inbox"
   BOARD_FILE="$STATE_DIR/board.jsonl"
   LEDGER_FILE="$STATE_DIR/ledger.jsonl"

@@ -24,7 +24,7 @@ F="$(agent_file "$SID")"
 if [ -f "$F" ]; then
   touch "$F" 2>/dev/null || true
 else
-  SHORT="$(short_sid "$SID")"; LABEL="$(next_label)"
+  SHORT="$(short_sid "$SID")"; LABEL="$(reserve_label "$SID")"   # atomic unique label (no TOCTOU dup)
   TMP="$F.tmp.$$"
   {
     printf '{'
