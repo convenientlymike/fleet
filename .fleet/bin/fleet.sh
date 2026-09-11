@@ -432,6 +432,7 @@ case "$CMD" in
   worktree) cmd_worktree "$@" ;;
   retire)   require_id; . "$DIR/brain-retire.sh"; cmd_retire "$@" ;;   # safely unload an agent from the fleet
   brain)    . "$DIR/brain-retire.sh"; cmd_brain "$@" ;;   # knowledge oracle + Brain-agent seat/router
+  attic)    . "$DIR/attic.sh"; cmd_attic "$@" ;;   # work-loss hardening: auto-backup every commit + pre-reset guard
   goal)     exec "$(dirname "$0")/goalstack" "$@" ;;   # per-window anchor goal (keyed by this window's session id)
   *) log_err "unknown command: $CMD"; usage; exit 2 ;;
 esac
