@@ -7,6 +7,29 @@ All notable changes to Fleet are documented here. The format is based on
 ## [Unreleased]
 
 ### Fixed
+- **Label reservation hardening (pre-merge red-team follow-up to the atomic reservation).** A 6-lens
+  adversarial red-team of the reservation (each finding refuted before trust) surfaced one **critical**
+  residual and two completions, now closed:
+  - **reap-vs-reserve race (the critical).** `reap()`'s label-GC removed a reservation whose owner had
+    no agent file — but `register.sh` creates the reservation *before* writing the agent file, so a
+    concurrent `reap` (which runs on every fleet command in every session) could delete a just-created
+    in-flight reservation, after which a third session re-`mkdir`'d the same `agent-N` → **the exact
+    duplicate-`agent-N` collision reintroduced**. The reap-GC path now carries the same reservation-age
+    **grace guard** `_label_reclaimable` uses on the reserve side: GC only when the owner is departed
+    **and** the reservation dir has aged past `FLEET_LABEL_GRACE`. A fresh in-flight slot (and the
+    empty-`sid` sub-window between `mkdir` and the `sid` write) is protected; a genuinely-departed
+    owner's minutes-old reservation still frees promptly.
+  - **Fail-loud routing symmetry.** `sid_for_target`'s pass-2 (kept-stale files) now fails loud (exit 3,
+    names candidate shorts) when ≥2 stale windows share a label, matching pass-1 — a handoff DM to a
+    departed `agent-N` is no longer silently delivered to only one of two same-label inboxes.
+  - **Grace is tunable + safer default.** `FLEET_LABEL_GRACE` is now config-readable (`label_grace_s`)
+    like `stale_after_s`, and its default is raised 3→10s to comfortably exceed the reserve→agent-file
+    write gap on a cold host spawning many windows at once.
+  - **Forcing coverage:** `selftest-labels.sh` gains **L7** (a concurrent reap during an in-flight
+    reserve — the fresh reservation SURVIVES; control: an aged departed one is still GC'd), **L7b**
+    (the empty-`sid` sub-window), and **L4b** (pass-2 kept-stale fail-loud + no over-trigger). Each was
+    watched to BITE with its guard reverted. (Reclaim-vs-reclaim atomicity and file-label↔reservation
+    reconciliation on upgrade are tracked as follow-ups.)
 - **Duplicate `agent-N` labels under concurrent registration (the two-"agent-1" collision).**
   `next_label` READ the agent files and the caller WROTE its own record separately, so two
   windows registering at the same time both saw "agent-1 free" and both took it — the roster

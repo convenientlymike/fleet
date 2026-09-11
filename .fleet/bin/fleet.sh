@@ -68,13 +68,26 @@ sid_for_target() {
     return 3
   fi
   [ "$n" -eq 1 ] && { printf '%s' "$1"; return 0; }
+  matches=""
   for f in "$AGENTS_DIR"/*.json; do     # pass 2: any KNOWN (kept-stale) agent file — still addressable for a DM
     [ -f "$f" ] || continue
     sid="$(basename "$f" .json)"
-    [ "$sid" = "$t" ] && { printf '%s' "$sid"; return 0; }
+    [ "$sid" = "$t" ] && { printf '%s' "$sid"; return 0; }   # exact sid = unambiguous
     lbl="$(json_field_file "$f" agent)"; sh="$(short_sid "$sid")"
-    if [ "$lbl" = "$t" ] || [ "$sh" = "$t" ]; then printf '%s' "$sid"; return 0; fi
+    [ "$sh" = "$t" ] && { printf '%s' "$sid"; return 0; }    # short = unambiguous
+    [ "$lbl" = "$t" ] && matches="$matches $sid"
   done
+  # a KEPT-STALE label held by >1 window is as ambiguous as a live one — fail loud symmetrically (else a
+  # handoff DM to a departed agent-N is silently delivered to only one of two same-label inboxes).
+  # shellcheck disable=SC2086  # intentional word-split of the space-joined sid list
+  set -- $matches
+  n=$#
+  if [ "$n" -gt 1 ]; then
+    log_err "ambiguous target '$t' — $n kept-stale agents share this label; disambiguate with a short id:"
+    for sid in "$@"; do log_err "  $(short_sid "$sid")  ($t)  fleet.sh msg $(short_sid "$sid") …"; done
+    return 3
+  fi
+  [ "$n" -eq 1 ] && { printf '%s' "$1"; return 0; }
   return 1
 }
 

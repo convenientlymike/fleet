@@ -343,7 +343,7 @@ _label_reclaimable() {
   local d="$1" owner="$2" self="$3"
   [ "$owner" = "$self" ] && return 0
   [ -n "$owner" ] && is_live "$owner" && return 1
-  [ "$(( $(now_epoch) - $(mtime_epoch "$d") ))" -gt "${FLEET_LABEL_GRACE:-3}" ]
+  [ "$(( $(now_epoch) - $(mtime_epoch "$d") ))" -gt "$FLEET_LABEL_GRACE" ]
 }
 
 reserve_label() {
@@ -575,10 +575,19 @@ reap() {
   # GC label reservations whose owner has NO agent file left (fully reaped above) so LABELS_DIR stays bounded.
   # A kept-stale (still-addressable) session keeps BOTH its file and its reservation → its label stays stable;
   # only a truly-GC'd (>agent_gc_s) or never-registered owner loses its slot, freeing the label for reuse.
+  # The GRACE guard on the reservation's OWN age is load-bearing: reserve_label creates the reservation BEFORE
+  # register.sh writes the agent file, so an IN-FLIGHT reservation momentarily has no agent file. reap() runs on
+  # every fleet command in every concurrent session — without the grace it would rm that fresh in-flight slot,
+  # and a 3rd session's reserve_label would then re-mkdir the same agent-N → the exact collision reintroduced.
+  # Same age guard _label_reclaimable uses on the reserve side (a genuinely-departed owner's reservation is
+  # minutes/hours old, so it is still GC'd promptly).
   for d in "$LABELS_DIR"/agent-*; do
     [ -d "$d" ] || continue
     owner="$(cat "$d/sid" 2>/dev/null || true)"
-    if [ -z "$owner" ] || [ ! -f "$(agent_file "$owner")" ]; then rm -rf "$d" 2>/dev/null || true; fi
+    if { [ -z "$owner" ] || [ ! -f "$(agent_file "$owner")" ]; } \
+       && [ "$(( $(now_epoch) - $(mtime_epoch "$d") ))" -gt "$FLEET_LABEL_GRACE" ]; then
+      rm -rf "$d" 2>/dev/null || true
+    fi
   done
   # orphaned/stale claims. A lock with a meta file is removed if its owner is
   # not live. A lock with NO meta yet is a claim in progress (mkdir won, meta
@@ -604,6 +613,12 @@ reap() {
 # seconds a freshly-mkdir'd lock may exist without meta.json before being
 # considered orphaned (covers the mkdir->write-meta window).
 FLEET_CLAIM_GRACE="${FLEET_CLAIM_GRACE:-5}"
+
+# seconds a fresh label reservation is protected from reclaim/GC — covers the reserve_label -> register.sh
+# agent-file-write window (see reserve_label / reap). MUST comfortably exceed that gap (a cold host spawning
+# many windows + python3/jq per jstr can take >1s) yet stay far below stale_after/agent_gc_s so a genuinely
+# departed owner's reservation still frees promptly. Env-overridable, config-tunable (label_grace_s), default 10.
+FLEET_LABEL_GRACE="${FLEET_LABEL_GRACE:-$(config_get label_grace_s 10)}"
 
 # _release_claims_of <sid> — rm -rf every claim owned by sid EXCEPT one covering still-dirty content (C0b: a
 # reaped dead/stale agent's claim over uncommitted work is kept, so a sibling's commit-a can't sweep the ownerless
