@@ -55,7 +55,7 @@ jobs:
           fi
 
   selftest:
-    name: selftest (retire + brain + collateral + labels — safety guards bite)
+    name: selftest (retire + brain + collateral + labels + attic — safety guards bite)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +76,13 @@ jobs:
           # Proves label assignment is atomic (8 concurrent → 8 distinct), stable, reused,
           # and that a duplicate live label fails loud. Hermetic (mktemp state).
           bash .fleet/bin/selftest-labels.sh
+      - name: Run the commit-attic selftest (work-loss hardening bites)
+        run: |
+          set -euo pipefail
+          # Proves every commit is auto-backed-up (ref + patch), the pre-reset guard BLOCKS a rewind
+          # dropping an un-atticed commit (allows recoverable ones + FORCE escape), and a dropped
+          # commit is recoverable. Hermetic (throwaway git repo + mktemp state).
+          bash .fleet/bin/selftest-attic.sh
 
   skills-install:
     name: skills install (install.sh drops every skill into .claude/skills/)

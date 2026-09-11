@@ -6,6 +6,26 @@ All notable changes to Fleet are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Commit-attic — work-loss hardening (`fleet.sh attic`).** Every commit is auto-backed-up so a branch
+  reset / `checkout -f` / gc can NEVER silently lose committed work — it is always recoverable. Two layers:
+  - **Auto-backup on commit** (a `post-commit` hook) writes both a GC-proof ref
+    `refs/attic/<agent>/<epoch>-<sha>` (a reset can't drop it; `git gc` keeps a ref's commit reachable) and a
+    browsable patch + metadata under the git-common state dir (`<state>/commit-attic/<agent>/`). The `<agent>`
+    sub-key is the fleet session id (else the branch).
+  - **Pre-reset guard** (a `reference-transaction` hook) BLOCKS a branch **rewind** that would drop a commit not
+    recoverable from the attic (a fast-forward, and a rewind whose dropped commits are all atticed, pass;
+    non-branch refs incl. `refs/attic/*` are ignored so backups never self-block). Escape hatch:
+    `FLEET_ATTIC_FORCE=1`.
+  - `fleet.sh attic install | list | recover <sha>` — install the hooks, browse backups, and recreate a branch at
+    any backed-up commit. Root-cause doctrine it pairs with: **each agent commits to a DEDICATED per-slice
+    branch**; the coordinator integrates via batch-land — never reset a shared branch carrying others' work.
+  - **Forcing function:** `.fleet/bin/selftest-attic.sh` (hermetic, wired into CI) proves each guarantee BITES
+    with a control that fires — backup makes a ref+patch, the guard blocks an un-atticed rewind (allows a
+    fast-forward / an atticed rewind / a FORCE escape), and a dropped commit is recoverable.
+  - **WHY (2026-09-11):** a SHARED lane branch was repeatedly `reset --hard origin/main`, dropping in-flight
+    slice commits from HEAD (recovered by hand via reflog). The attic makes recovery structural, not manual.
+
 ### Fixed
 - **Label reservation hardening (pre-merge red-team follow-up to the atomic reservation).** A 6-lens
   adversarial red-team of the reservation (each finding refuted before trust) surfaced one **critical**
