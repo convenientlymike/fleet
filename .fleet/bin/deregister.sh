@@ -39,6 +39,7 @@ fi
 
 rm -f "$F" 2>/dev/null || true
 rm -f "$INBOX_DIR/$SID.jsonl" "$INBOX_DIR/$SID.seen" 2>/dev/null || true
+release_label "$SID"   # clean close → free this session's label reservation for reuse (unread-DM path above keeps it)
 
 [ -n "$LABEL" ] && board_event leave "$LABEL" "$SHORT" ""
 exit 0

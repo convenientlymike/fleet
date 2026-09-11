@@ -47,14 +47,27 @@ PY
 # ---- resolve a recipient target (label | short | sid) to a sid -------------
 # Iterates ALL known agent files — LIVE and KEPT-STALE (reap keeps a stale agent file so a momentarily-stale
 # window stays addressable; a DM must reach its inbox, not be dropped). Prefers a live match; falls back to any
-# kept-stale file. Returns 1 only for a truly unknown/GC'd sid.
+# kept-stale file. An exact sid or short id is ALWAYS unambiguous; a LABEL (agent-N) can match >1 live window
+# (the pre-fix collision, or a legacy duplicate), so a label matching multiple LIVE agents FAILS LOUD (rc=3)
+# with the candidate shorts instead of silently mis-routing to whichever file is enumerated first. Returns 1
+# for a truly unknown/GC'd sid.
 sid_for_target() {
-  local t="$1" sid lbl sh f
-  for sid in $(live_sids); do          # pass 1: prefer a LIVE match
+  local t="$1" sid lbl sh f matches="" n
+  for sid in $(live_sids); do          # pass 1: prefer a LIVE match; sid/short are unique, label may not be
     [ "$sid" = "$t" ] && { printf '%s' "$sid"; return 0; }
     lbl="$(json_field_file "$(agent_file "$sid")" agent)"; sh="$(short_sid "$sid")"
-    if [ "$lbl" = "$t" ] || [ "$sh" = "$t" ]; then printf '%s' "$sid"; return 0; fi
+    [ "$sh" = "$t" ] && { printf '%s' "$sid"; return 0; }
+    [ "$lbl" = "$t" ] && matches="$matches $sid"
   done
+  # shellcheck disable=SC2086  # intentional word-split of the space-joined sid list
+  set -- $matches
+  n=$#
+  if [ "$n" -gt 1 ]; then               # a live label held by >1 window → refuse to guess; name the candidates
+    log_err "ambiguous target '$t' — $n live agents share this label; disambiguate with a short id:"
+    for sid in "$@"; do log_err "  $(short_sid "$sid")  ($t)  fleet.sh msg $(short_sid "$sid") …"; done
+    return 3
+  fi
+  [ "$n" -eq 1 ] && { printf '%s' "$1"; return 0; }
   for f in "$AGENTS_DIR"/*.json; do     # pass 2: any KNOWN (kept-stale) agent file — still addressable for a DM
     [ -f "$f" ] || continue
     sid="$(basename "$f" .json)"
@@ -190,7 +203,10 @@ cmd_msg() {
     board_event msg "$from" "$short" "$(jstr to all),$(jstr body "$body")"
     echo "broadcast to $c agent(s)"
   else
-    local rsid; rsid="$(sid_for_target "$to")" || { log_err "no agent (live or recently-seen) matches '$to' (try fleet.sh roster)"; return 1; }
+    local rsid rc
+    rsid="$(sid_for_target "$to")"; rc=$?
+    [ "$rc" -eq 3 ] && return 3   # ambiguous label — sid_for_target already named the candidates + the fix (short id)
+    [ "$rc" -ne 0 ] && { log_err "no agent (live or recently-seen) matches '$to' (try fleet.sh roster)"; return 1; }
     _emit_msg "$rsid"
     board_event msg "$from" "$short" "$(jstr to "$to"),$(jstr body "$body")"
     echo "sent to $to"

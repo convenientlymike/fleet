@@ -30,13 +30,13 @@ F="$(agent_file "$SID")"
 SHORT="$(short_sid "$SID")"
 
 if [ -f "$F" ]; then
-  # resume / clear / compact of an existing session: keep label, refresh heartbeat
-  LABEL="$(json_field_file "$F" agent)"
-  [ -z "$LABEL" ] && LABEL="$(next_label)"
+  # resume / clear / compact of an existing session: reserve keeps the SAME label (stable per session; the
+  # file's current label is passed as the continuity hint so an upgrade / reservation-less resume preserves it)
+  LABEL="$(reserve_label "$SID" "$(json_field_file "$F" agent)")"
   STARTED="$(json_field_file "$F" started_at)"
   [ -z "$STARTED" ] && STARTED="$(now_iso)"
 else
-  LABEL="$(next_label)"
+  LABEL="$(reserve_label "$SID")"   # first registration: atomically claim a UNIQUE label (no TOCTOU dup)
   STARTED="$(now_iso)"
 fi
 

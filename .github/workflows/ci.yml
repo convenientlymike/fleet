@@ -55,7 +55,7 @@ jobs:
           fi
 
   selftest:
-    name: selftest (retire + brain — safety guards bite)
+    name: selftest (retire + brain + collateral + labels — safety guards bite)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +66,16 @@ jobs:
           # CONTROL actually bites (it needs a real git tree to mark work dirty).
           # State is isolated to a mktemp; the live fleet is never touched.
           bash .fleet/bin/selftest-brain-retire.sh
+      - name: Run the collateral selftest (shared-tree fixes bite)
+        run: |
+          set -euo pipefail
+          bash .fleet/bin/selftest-collateral.sh
+      - name: Run the label-reservation selftest (atomic agent-N, no duplicate-agent-1)
+        run: |
+          set -euo pipefail
+          # Proves label assignment is atomic (8 concurrent → 8 distinct), stable, reused,
+          # and that a duplicate live label fails loud. Hermetic (mktemp state).
+          bash .fleet/bin/selftest-labels.sh
 
   skills-install:
     name: skills install (install.sh drops every skill into .claude/skills/)
