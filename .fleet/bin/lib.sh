@@ -346,6 +346,25 @@ _label_reclaimable() {
   [ "$(( $(now_epoch) - $(mtime_epoch "$d") ))" -gt "$FLEET_LABEL_GRACE" ]
 }
 
+# _label_held_by_live_file <label> <self_sid> — true if a LIVE agent FILE owned by a sid OTHER than <self_sid>
+# carries <label>. The UPGRADE-TRANSITION guard: rolling a new build's state model onto an ACTIVE fleet leaves
+# existing windows carrying an agent-FILE label but NO reservation yet (a reservation is created on their next
+# register.sh). Without this, a NEW registration during that window would be handed an agent-N a live window's
+# file already shows — the duplicate-agent-N collision, reintroduced purely by rollout timing. reserve_label
+# consults this so a live file-label OCCUPIES its slot until the owner re-registers (bridging file → reservation);
+# the collision is then closed BY CONSTRUCTION, not by rollout order. Self-excluded so a session re-registering
+# its OWN label is never blocked by its own file. Only LIVE file-labels block — a stale/dead one is reusable.
+_label_held_by_live_file() {
+  local label="$1" self="$2" f sid
+  for f in "$AGENTS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .json)"
+    [ "$sid" = "$self" ] && continue
+    [ "$(json_field_file "$f" agent)" = "$label" ] && is_live "$sid" && return 0
+  done
+  return 1
+}
+
 reserve_label() {
   local sid="$1" preferred="${2:-}" d owner n
   ensure_state
@@ -355,27 +374,36 @@ reserve_label() {
     [ "$(cat "$d/sid" 2>/dev/null || true)" = "$sid" ] && { printf '%s' "${d##*/}"; return 0; }
   done
   # (1b) continuity bridge: claim exactly `preferred` if it is free, ours, or a provably-dead owner's (never
-  #      steal a live or a fresh-empty/in-progress slot — fall through to (2) and take a different N instead)
+  #      steal a live or a fresh-empty/in-progress slot — fall through to (2) and take a different N instead).
+  #      Skipped entirely if a LIVE OTHER window's agent-file already holds `preferred` (upgrade guard).
   case "$preferred" in
     agent-*)
-      d="$LABELS_DIR/$preferred"
-      if mkdir "$d" 2>/dev/null; then printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0; fi
-      owner="$(cat "$d/sid" 2>/dev/null || true)"
-      if { [ "$owner" = "$sid" ] || { [ -n "$owner" ] && ! is_live "$owner"; }; } && rm -rf "$d" 2>/dev/null && mkdir "$d" 2>/dev/null; then
-        printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0
+      if ! _label_held_by_live_file "$preferred" "$sid"; then
+        d="$LABELS_DIR/$preferred"
+        if mkdir "$d" 2>/dev/null; then printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0; fi
+        owner="$(cat "$d/sid" 2>/dev/null || true)"
+        if { [ "$owner" = "$sid" ] || { [ -n "$owner" ] && ! is_live "$owner"; }; } && rm -rf "$d" 2>/dev/null && mkdir "$d" 2>/dev/null; then
+          printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf '%s' "$preferred"; return 0
+        fi
       fi
       ;;
   esac
   # (2) lowest free N via atomic mkdir; reclaim only a provably-free slot (dead owner / grace-expired empty)
   n=1
   while :; do
+    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }   # FS-broken / pathological failsafe — never loop forever
     d="$LABELS_DIR/agent-$n"
-    if mkdir "$d" 2>/dev/null; then printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf 'agent-%s' "$n"; return 0; fi
+    if mkdir "$d" 2>/dev/null; then
+      # UPGRADE guard: mkdir winning means no RESERVATION held agent-N — but a LIVE window's agent-FILE may still
+      # hold it (pre-reservation upgrade window). If so this slot is really taken: release our just-won dir + skip,
+      # so a new registration never duplicates a live file-label. (Runs only on a free slot → ~free in steady state.)
+      if _label_held_by_live_file "agent-$n" "$sid"; then rm -rf "$d" 2>/dev/null || true; n=$((n+1)); continue; fi
+      printf '%s' "$sid" > "$d/sid" 2>/dev/null || true; printf 'agent-%s' "$n"; return 0
+    fi
     owner="$(cat "$d/sid" 2>/dev/null || true)"
     if [ "$owner" = "$sid" ]; then printf 'agent-%s' "$n"; return 0; fi
     if _label_reclaimable "$d" "$owner" "$sid"; then rm -rf "$d" 2>/dev/null || true; continue; fi
     n=$((n+1))
-    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }   # FS-broken failsafe — never loop forever
   done
 }
 
@@ -395,12 +423,13 @@ next_label() {
   local d owner n
   n=1
   while :; do
+    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }
+    if _label_held_by_live_file "agent-$n" ""; then n=$((n+1)); continue; fi   # a live file-label occupies the slot (upgrade window)
     d="$LABELS_DIR/agent-$n"
     [ -d "$d" ] || { printf 'agent-%s' "$n"; return 0; }
     owner="$(cat "$d/sid" 2>/dev/null || true)"
     if [ -z "$owner" ] || ! is_live "$owner"; then printf 'agent-%s' "$n"; return 0; fi
     n=$((n+1))
-    [ "$n" -gt 4096 ] && { printf 'agent-%s' "$n"; return 0; }
   done
 }
 

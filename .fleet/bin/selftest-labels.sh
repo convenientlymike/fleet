@@ -187,6 +187,22 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
   [ ! -d "$LABELS_DIR/agent-1" ] && pass "L7b control: an AGED empty-sid orphan reservation IS GC-removed (bounded)" \
                                  || fail "L7b control: an aged empty-sid orphan survived — LABELS_DIR grows unbounded"
 
+  # ── L8: upgrade-transition guard — a NEW registration must NOT take an agent-N a LIVE agent-FILE holds ──────
+  # On a rollout onto an ACTIVE fleet, existing windows carry a file-label but no reservation yet (created on
+  # their next register.sh). reserve_label must treat a live file-label as occupying its slot, or a new window
+  # gets handed a label a live window already shows — the collision, reintroduced by rollout timing.
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mk_agent existing agent-1                       # a LIVE pre-upgrade window: file says agent-1, NO reservation
+  w="$(reserve_label neww)"                        # a NEW window registers during the transition
+  [ "$w" != "agent-1" ] && pass "L8: a NEW registration SKIPS agent-1 (held by a LIVE agent-file, no reservation) → got $w" \
+                        || fail "L8: a NEW registration took agent-1 that a LIVE window's file already holds — upgrade collision"
+  # control: a DEAD/stale file-label is REUSABLE — the guard protects only LIVE file-labels (no over-block)
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mk_agent departed agent-1 old                    # a STALE (non-live) file-label, no reservation
+  w2="$(reserve_label fresh2)"
+  [ "$w2" = "agent-1" ] && pass "L8 control: a DEAD/stale file-label IS reusable (new window takes agent-1 — no over-block)" \
+                        || fail "L8 control: a stale file-label blocked reuse ($w2) — the transition guard over-blocks"
+
   [ "$ok" = 1 ]
 ) || ok=0
 

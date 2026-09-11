@@ -25,11 +25,18 @@ All notable changes to Fleet are documented here. The format is based on
   - **Grace is tunable + safer default.** `FLEET_LABEL_GRACE` is now config-readable (`label_grace_s`)
     like `stale_after_s`, and its default is raised 3→10s to comfortably exceed the reserve→agent-file
     write gap on a cold host spawning many windows at once.
+  - **Upgrade-transition guard (closes the collision by construction, not rollout timing).** Rolling the
+    reservation model onto an *active* fleet leaves existing windows carrying an agent-**file** label but
+    no reservation yet (created on their next `register.sh`). `reserve_label`/`next_label` now consult
+    `_label_held_by_live_file`: a label a LIVE window's agent-file holds OCCUPIES its slot (self-excluded,
+    live-only), so a new registration during the transition is never handed a label a live window already
+    shows. The check runs only on an otherwise-free slot, so it is ~free in steady state.
   - **Forcing coverage:** `selftest-labels.sh` gains **L7** (a concurrent reap during an in-flight
     reserve — the fresh reservation SURVIVES; control: an aged departed one is still GC'd), **L7b**
-    (the empty-`sid` sub-window), and **L4b** (pass-2 kept-stale fail-loud + no over-trigger). Each was
-    watched to BITE with its guard reverted. (Reclaim-vs-reclaim atomicity and file-label↔reservation
-    reconciliation on upgrade are tracked as follow-ups.)
+    (the empty-`sid` sub-window), **L4b** (pass-2 kept-stale fail-loud + no over-trigger), and **L8** (a
+    new registration skips a live agent-file's label during an upgrade; control: a stale file-label is
+    reusable). Each was watched to BITE with its guard reverted. (Reclaim-vs-reclaim atomicity and the
+    reclaimed-then-revived heartbeat-heal remain tracked as follow-ups.)
 - **Duplicate `agent-N` labels under concurrent registration (the two-"agent-1" collision).**
   `next_label` READ the agent files and the caller WROTE its own record separately, so two
   windows registering at the same time both saw "agent-1 free" and both took it — the roster
