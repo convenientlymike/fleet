@@ -252,9 +252,17 @@ for a in "$@"; do
   esac
 done
 
+# ---- optional pluggable RECOVERY SWEEP (a project can inject recovery-nudge DMs each cycle; trackboard's #8b-3
+#      posts them for agents whose API failure has cleared). Runs BEFORE the scan so its DMs are delivered by the
+#      SAME scan_once — STAGGERED across cycles by the defer-not-drop cursor. Generic: $FLEET_WAKE_SWEEP_CMD
+#      (explicit) or a sibling tb-resilience-sweep.sh (convention). Fail-open; never blocks the dispatcher.
+_SWEEP="${FLEET_WAKE_SWEEP_CMD:-}"
+[ -z "$_SWEEP" ] && [ -x "$DIR/tb-resilience-sweep.sh" ] && _SWEEP="$DIR/tb-resilience-sweep.sh"
+run_sweep() { [ -n "$_SWEEP" ] || return 0; eval "$_SWEEP" >/dev/null 2>&1 || true; }
+
 if [ "$WATCH" = 1 ]; then
-  log "watch mode (interval ${WATCH_INTERVAL_S}s, live=$LIVE) — kill switch: touch $WAKE_OFF"
-  while true; do scan_once; sleep "$WATCH_INTERVAL_S"; done
+  log "watch mode (interval ${WATCH_INTERVAL_S}s, live=$LIVE) — kill switch: touch $WAKE_OFF$( [ -n "$_SWEEP" ] && printf ' — sweep: %s' "$_SWEEP")"
+  while true; do run_sweep; scan_once; sleep "$WATCH_INTERVAL_S"; done
 else
-  scan_once
+  run_sweep; scan_once
 fi
