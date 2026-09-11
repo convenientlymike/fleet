@@ -168,6 +168,27 @@ EOF
     && pass "B9 control: an adopted agent file gains exactly the host field (node-x, 10 fields)" \
     || fail "B9 control: adopted agent file missing host (host=$(jq -r '.host // "∅"' "$af" 2>/dev/null))"
 
+  # ── B10: CROSS-LANGUAGE golden — bash verifies a reservation signed by Trackboard's Python canonicalization ──
+  # This is the load-bearing interop provable in a pure-bash repo (no Python at CI time): the golden record below
+  # was minted by Python with Trackboard's EXACT signing — json.dumps(record-minus-sig, sort_keys=True,
+  # separators=(",",":")) then HMAC-SHA256 — under a key DERIVED from a public string (sha256("trackboard-adopt-
+  # selftest-golden-v1"), NOT a real credential). If adopt.sh's `jq -cS` + `openssl` verification accepts it, bash
+  # and Python agree on canonicalization; the control (a 1-field corruption) must be rejected. The COMPLEMENTARY
+  # return direction (Python re-verifies bash's re-signature) is proven in the trackboard suite
+  # (tests/test_native_adopt_crosslang.py), which arms in CI once this ships into the trackboard tree.
+  GOLDKEY="$(printf '%s' 'trackboard-adopt-selftest-golden-v1' | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')"
+  gf="$RDIR/rsv_golden01.json"
+  cat > "$gf" <<'GOLDEN'
+{"rid":"rsv_golden01","schema":2,"display_name":"Aurora","role":"Backend","mission":"seed the crew UI","model":"opus","reasoning_effort":"high","target":{"device":"local","kind":"new","name":"wt","cwd":"/work/wt"},"status":"provisioned","bound_sid":null,"bound_host":null,"adopted_via":null,"launch":{"attempt_at":null,"launched_at":null,"mechanism":null,"client_ip":null,"result":null,"model_applied":false},"created_at":"2026-09-11T00:00:00Z","updated_at":"2026-09-11T00:00:00Z","expires_at":"2999-01-01T00:00:00Z","sig":"90849d38bfc301afa3cf56f92021ae1eb68f463495f63e56501364a25dc86a97"}
+GOLDEN
+  _adopt_sig_ok "$gf" "$GOLDKEY" \
+    && pass "B10: bash verifies a PYTHON-minted golden signature (cross-language canonicalization agrees)" \
+    || fail "B10: bash rejected a valid Python-signed record — jq -cS/openssl DIVERGES from Trackboard's json.dumps"
+  jq '.mission="corrupted"' "$gf" > "$gf.t" 2>/dev/null && mv "$gf.t" "$gf"   # 1-field tamper, stale sig
+  _adopt_sig_ok "$gf" "$GOLDKEY" \
+    && fail "B10 control: a corrupted golden record verified — the authenticity check does NOT bite" \
+    || pass "B10 control: a 1-field corruption of the golden record is rejected"
+
   [ "$ok" = 1 ]
 ) || ok=0
 

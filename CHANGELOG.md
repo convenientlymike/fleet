@@ -49,7 +49,11 @@ All notable changes to Fleet are documented here. The format is based on
   - **Forcing function:** `.fleet/bin/selftest-adopt.sh` (hermetic, wired into CI) proves each guarantee BITES
     with a control that fires — a signed reservation adopts (overlay + mission + flip + re-sign), while a
     tampered/forged one, an ambiguous cwd match, a `reserved`-status one, and a wrong-host one are all REFUSED,
-    and `register.sh` stays byte-compatible when nothing is adopted.
+    and `register.sh` stays byte-compatible when nothing is adopted. A **cross-language golden** check additionally
+    proves bash's `jq -cS`/`openssl` verification accepts a record signed by Trackboard's *Python* canonicalization
+    (a Python-minted fixture under a key derived from a public string — no real credential), so a future jq/openssl
+    canonicalization drift is caught at CI time without needing Python in this pure-bash repo. (The return
+    direction — Python re-verifies a bash re-signature — is proven in the trackboard suite.)
 
 ### Fixed
 - **Label reservation hardening (pre-merge red-team follow-up to the atomic reservation).** A 6-lens
