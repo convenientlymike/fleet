@@ -134,13 +134,15 @@ scan_once() {
     cur=0; cur="$(wc -l < "$ibox" 2>/dev/null | tr -d ' ')"; cur="${cur:-0}"
     [ "$cur" -le "$prev" ] && continue
     newcount=$((cur - prev))
-    printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true    # advance cursor = "dispatcher has processed these"
-    if ! has_agent_record "$uuid"; then log "skip $(shortid "$uuid"): no agent record (unknown/GC'd session)"; continue; fi
-    if is_running "$uuid"; then log "skip $(shortid "$uuid"): LIVE process — its own Monitor handles it (${newcount} new)"; continue; fi
-    if [ -f "$WAKE_OFF" ]; then log "KILL-SWITCH on ($WAKE_OFF) — NOT waking $(shortid "$uuid") (${newcount} new)"; continue; fi
-    if ! rate_ok; then log "RATE-LIMIT ${WAKE_MAX_PER_WINDOW}/${WAKE_WINDOW_S}s — deferring $(shortid "$uuid")"; continue; fi
-    if in_cooldown "$uuid"; then log "COOLDOWN ${WAKE_COOLDOWN_S}s — skipping $(shortid "$uuid")"; continue; fi
-    do_wake "$uuid" "$newcount"
+    # #8b DEFER-NOT-DROP: advance the cursor ONLY at a TERMINAL disposition — a gone/live session, or a SUCCESSFUL
+    # wake. For a THROTTLE deferral (kill-switch / rate-limit / cooldown) LEAVE the cursor so the next scan RETRIES;
+    # this turns the WAKE_MAX/window cap from a DROPPER into a STAGGERER (the recovery-nudge thundering-herd fix).
+    if ! has_agent_record "$uuid"; then printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true; log "skip $(shortid "$uuid"): no agent record (unknown/GC'd session)"; continue; fi
+    if is_running "$uuid"; then printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true; log "skip $(shortid "$uuid"): LIVE process — its own Monitor handles it (${newcount} new)"; continue; fi
+    if [ -f "$WAKE_OFF" ]; then log "KILL-SWITCH on ($WAKE_OFF) — DEFERRING $(shortid "$uuid") (${newcount} new; cursor HELD)"; continue; fi
+    if ! rate_ok; then log "RATE-LIMIT ${WAKE_MAX_PER_WINDOW}/${WAKE_WINDOW_S}s — DEFERRING $(shortid "$uuid") (cursor HELD, retries next scan)"; continue; fi
+    if in_cooldown "$uuid"; then log "COOLDOWN ${WAKE_COOLDOWN_S}s — DEFERRING $(shortid "$uuid") (cursor HELD)"; continue; fi
+    if do_wake "$uuid" "$newcount"; then printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true; fi   # advance ONLY on a successful wake
   done
   log "scan done: $EMITTED wake(s) $( [ "$LIVE" = 1 ] && echo spawned || echo 'planned (dry-run)')"
 }
@@ -221,6 +223,13 @@ selftest() {
   printf '{"body":"b"}\n' > "$INBOX_DIR/$d2.jsonl"
   EMITTED=0; scan_once >/dev/null 2>&1
   [ "$EMITTED" -eq 1 ] && ok "neg: rate-limit bit (1 of 2 planned; 1 deferred)" || bad "rate-limit did NOT bite (EMITTED=$EMITTED, want 1)"
+
+  # 6) DEFER-NOT-DROP (#8b): the rate-DEFERRED target must RETRY on a later scan — its cursor was HELD, not advanced.
+  #    Clear the rate window + rescan; the target deferred in (5) is now planned. With the OLD pre-advance behavior it
+  #    would be DROPPED (cursor already advanced) -> EMITTED=0. This is the thundering-herd staggerer's forcing control.
+  rm -f "$WAKE_STATE_DIR/ratelimit"
+  EMITTED=0; scan_once >/dev/null 2>&1
+  [ "$EMITTED" -eq 1 ] && ok "neg: DEFER-NOT-DROP bit (rate-deferred nudge retried after the window cleared)" || bad "defer-not-drop did NOT bite (EMITTED=$EMITTED, want 1) — a throttled nudge was DROPPED"
 
   rm -rf "$tmp" 2>/dev/null || true
   echo ""
