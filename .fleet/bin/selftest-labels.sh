@@ -44,6 +44,8 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
     if [ "${3:-}" = old ]; then touch -d '1 hour ago' "$AGENTS_DIR/$1.json" 2>/dev/null || touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || echo 200001010000)" "$AGENTS_DIR/$1.json"; fi
     return 0
   }
+  # age_res <agent-N> — backdate a reservation dir past the grace window (simulates a genuinely-departed owner).
+  age_res() { touch -d '1 hour ago' "$LABELS_DIR/$1" 2>/dev/null || touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || echo 200001010000)" "$LABELS_DIR/$1"; }
 
   # ── L1: atomic — 8 CONCURRENT reservations are all DISTINCT ──────────────────────────────────────
   outd="$tmp/l1"; mkdir -p "$outd"
@@ -108,6 +110,23 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
     pass "L4 control: a UNIQUE live label still resolves + delivers (no over-trigger)"
   else fail "L4 control: a unique label was mis-flagged as ambiguous (rc=$uniq_rc)"; fi
 
+  # L4b: pass-2 symmetry — a label held by >1 KEPT-STALE (non-live) window also FAILS LOUD (not silent mis-route).
+  # The sender must be a DISTINCT window (ensure_self_registered touches the sender's file → would revive a stale
+  # dup and collapse the scenario), so route via a separate 'probe' sender; st1/st2 stay non-live.
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mk_agent st1 agent-9 old; mk_agent st2 agent-9 old   # two kept-stale (non-live) windows share agent-9
+  mk_agent solo agent-8 old                            # one kept-stale window (unique label)
+  errf2="$tmp/l4b.err"; st_rc=0
+  bash "$DIR/fleet.sh" --id probe msg agent-9 "stale ambiguity probe" >/dev/null 2>"$errf2" || st_rc=$?
+  if [ "$st_rc" -eq 3 ] && grep -q "ambiguous target 'agent-9'" "$errf2"; then
+    pass "L4b: a KEPT-STALE label held by 2 windows FAILS LOUD on pass-2 (exit 3), symmetric with pass-1"
+  else fail "L4b: pass-2 kept-stale dup did not fail loud (rc=$st_rc) — a handoff DM would silently mis-deliver"; fi
+  # control: a UNIQUE kept-stale label still delivers (pass-2 fail-loud does not over-trigger)
+  solo_rc=0; bash "$DIR/fleet.sh" --id probe msg agent-8 "stale unique" >/dev/null 2>&1 || solo_rc=$?
+  if [ "$solo_rc" -eq 0 ] && [ -f "$INBOX_DIR/solo.jsonl" ] && grep -q "stale unique" "$INBOX_DIR/solo.jsonl"; then
+    pass "L4b control: a UNIQUE kept-stale label still resolves + delivers (no over-trigger)"
+  else fail "L4b control: a unique kept-stale label mis-flagged (rc=$solo_rc)"; fi
+
   # ── L5: continuity bridge — an existing file-label with no reservation is PRESERVED ──────────────
   rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
   mk_agent mig agent-5                                # a resuming/upgraded session labeled agent-5, no reservation yet
@@ -120,10 +139,11 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
   [ "$t5" != "agent-5" ] && pass "L5 control: a preferred label held by a LIVE session is NOT stolen ($t5)" \
                          || fail "L5 control: reserve stole a live session's label — collision reintroduced"
 
-  # ── L6: reap GC bounds LABELS_DIR — reaped owner's slot removed, kept (live) owner's retained ────
+  # ── L6: reap GC bounds LABELS_DIR — an AGED departed owner's slot removed, a live owner's retained ────
   rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
-  mk_agent keep x; reserve_label keep >/dev/null      # live → keeps file + reservation
-  mk_agent gone x; reserve_label gone >/dev/null; rm -f "$AGENTS_DIR/gone.json"   # owner file fully gone
+  mk_agent keep x; reserve_label keep >/dev/null                               # live → keeps file + reservation
+  mk_agent gone x; lg="$(reserve_label gone)"; rm -f "$AGENTS_DIR/gone.json"    # owner file fully gone…
+  age_res "$lg"                                                                # …and its reservation aged past grace (a real departure)
   reap
   gone_present=0; keep_present=0
   for d in "$LABELS_DIR"/agent-*; do
@@ -132,10 +152,56 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
     [ "$o" = gone ] && gone_present=1
     [ "$o" = keep ] && keep_present=1
   done
-  [ "$gone_present" = 0 ] && pass "L6: reap GC-removes a reservation whose owner file is gone (LABELS_DIR bounded)" \
-                          || fail "L6: a fully-reaped owner's reservation survived — LABELS_DIR grows unbounded"
+  [ "$gone_present" = 0 ] && pass "L6: reap GC-removes an AGED departed owner's reservation (LABELS_DIR bounded)" \
+                          || fail "L6: a departed owner's aged reservation survived — LABELS_DIR grows unbounded"
   [ "$keep_present" = 1 ] && pass "L6 control: a LIVE owner keeps its reservation through reap (stable label preserved)" \
                           || fail "L6 control: reap dropped a live owner's reservation — label would churn"
+
+  # ── L7: reap-vs-reserve RACE — a FRESH in-flight reservation SURVIVES a concurrent reap (the grace guard) ────
+  # reserve_label creates state/labels/agent-N BEFORE register.sh writes agents/<sid>.json, so an in-flight slot
+  # momentarily has no agent file. reap runs on every fleet command in every session; without the grace guard it
+  # deletes that fresh slot and a 3rd session's reserve_label re-mkdirs the same agent-N → collision reintroduced.
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  reserve_label inflight >/dev/null            # reservation created; agent file NOT written yet (in-flight), fresh
+  reap
+  infl_present=0
+  for d in "$LABELS_DIR"/agent-*; do [ -d "$d" ] && [ "$(cat "$d/sid" 2>/dev/null || true)" = inflight ] && infl_present=1; done
+  [ "$infl_present" = 1 ] && pass "L7: a FRESH in-flight reservation SURVIVES a concurrent reap (grace guard — race closed)" \
+                          || fail "L7: reap deleted an in-flight reservation — a 3rd session would re-grab the label (collision reintroduced)"
+  # control: the SAME reservation, once AGED past grace with still no agent file, IS GC-removed (guard doesn't leak)
+  for d in "$LABELS_DIR"/agent-*; do [ -d "$d" ] && [ "$(cat "$d/sid" 2>/dev/null || true)" = inflight ] && age_res "$(basename "$d")"; done
+  reap
+  infl_after=0
+  for d in "$LABELS_DIR"/agent-*; do [ -d "$d" ] && [ "$(cat "$d/sid" 2>/dev/null || true)" = inflight ] && infl_after=1; done
+  [ "$infl_after" = 0 ] && pass "L7 control: an AGED no-agent-file reservation IS GC-removed (grace protects only the in-flight window)" \
+                        || fail "L7 control: an aged orphan reservation survived — the grace guard leaks (unbounded)"
+
+  # L7b: the EMPTY-SID sub-window — reserve_label mkdir's the dir a beat BEFORE writing 'sid'. A concurrent reap
+  # reading owner="" must also honor the grace guard (the [ -z "$owner" ] branch), else the same fresh-slot delete.
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mkdir -p "$LABELS_DIR/agent-1"                 # a just-mkdir'd reservation, 'sid' not written yet (owner reads "")
+  reap
+  [ -d "$LABELS_DIR/agent-1" ] && pass "L7b: a FRESH empty-sid reservation (mkdir'd, sid not yet written) SURVIVES reap" \
+                               || fail "L7b: reap deleted an empty-sid in-flight slot — the [ -z owner ] branch lacks the grace guard"
+  age_res agent-1; reap                          # once aged, the orphan empty dir IS GC'd (does not accumulate)
+  [ ! -d "$LABELS_DIR/agent-1" ] && pass "L7b control: an AGED empty-sid orphan reservation IS GC-removed (bounded)" \
+                                 || fail "L7b control: an aged empty-sid orphan survived — LABELS_DIR grows unbounded"
+
+  # ── L8: upgrade-transition guard — a NEW registration must NOT take an agent-N a LIVE agent-FILE holds ──────
+  # On a rollout onto an ACTIVE fleet, existing windows carry a file-label but no reservation yet (created on
+  # their next register.sh). reserve_label must treat a live file-label as occupying its slot, or a new window
+  # gets handed a label a live window already shows — the collision, reintroduced by rollout timing.
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mk_agent existing agent-1                       # a LIVE pre-upgrade window: file says agent-1, NO reservation
+  w="$(reserve_label neww)"                        # a NEW window registers during the transition
+  [ "$w" != "agent-1" ] && pass "L8: a NEW registration SKIPS agent-1 (held by a LIVE agent-file, no reservation) → got $w" \
+                        || fail "L8: a NEW registration took agent-1 that a LIVE window's file already holds — upgrade collision"
+  # control: a DEAD/stale file-label is REUSABLE — the guard protects only LIVE file-labels (no over-block)
+  rm -rf "${LABELS_DIR:?}"/* "${AGENTS_DIR:?}"/*.json 2>/dev/null || true
+  mk_agent departed agent-1 old                    # a STALE (non-live) file-label, no reservation
+  w2="$(reserve_label fresh2)"
+  [ "$w2" = "agent-1" ] && pass "L8 control: a DEAD/stale file-label IS reusable (new window takes agent-1 — no over-block)" \
+                        || fail "L8 control: a stale file-label blocked reuse ($w2) — the transition guard over-blocks"
 
   [ "$ok" = 1 ]
 ) || ok=0
