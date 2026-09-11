@@ -48,6 +48,10 @@ WAKE_COOLDOWN_S="${FLEET_WAKE_COOLDOWN:-120}"
 WAKE_TIMEOUT_S="${FLEET_WAKE_TIMEOUT:-240}"
 WAKE_PERMISSION="${FLEET_WAKE_PERMISSION:-acceptEdits}"
 WATCH_INTERVAL_S="${FLEET_WAKE_INTERVAL:-10}"
+# #9 (R5): inter-wake stagger gap (seconds) — 0 = off. When >0, consecutive wakes in a scan are spread by this many
+# seconds so a whole-fleet recovery never fires N "continue"s at once (pairs with the rate cap + defer-not-drop).
+# trackboard maps its governor.json `stagger_messages_enabled` onto this via FLEET_WAKE_STAGGER at dispatcher launch.
+WAKE_STAGGER_S="${FLEET_WAKE_STAGGER:-0}"
 LIVE=0
 EMITTED=0
 
@@ -142,7 +146,10 @@ scan_once() {
     if [ -f "$WAKE_OFF" ]; then log "KILL-SWITCH on ($WAKE_OFF) — DEFERRING $(shortid "$uuid") (${newcount} new; cursor HELD)"; continue; fi
     if ! rate_ok; then log "RATE-LIMIT ${WAKE_MAX_PER_WINDOW}/${WAKE_WINDOW_S}s — DEFERRING $(shortid "$uuid") (cursor HELD, retries next scan)"; continue; fi
     if in_cooldown "$uuid"; then log "COOLDOWN ${WAKE_COOLDOWN_S}s — DEFERRING $(shortid "$uuid") (cursor HELD)"; continue; fi
-    if do_wake "$uuid" "$newcount"; then printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true; fi   # advance ONLY on a successful wake
+    if do_wake "$uuid" "$newcount"; then
+      printf '%s' "$cur" > "$cursor_f" 2>/dev/null || true          # advance ONLY on a successful wake
+      [ "${WAKE_STAGGER_S:-0}" -gt 0 ] 2>/dev/null && sleep "$WAKE_STAGGER_S"   # #9: spread consecutive wakes by the stagger gap
+    fi
   done
   log "scan done: $EMITTED wake(s) $( [ "$LIVE" = 1 ] && echo spawned || echo 'planned (dry-run)')"
 }
@@ -230,6 +237,13 @@ selftest() {
   rm -f "$WAKE_STATE_DIR/ratelimit"
   EMITTED=0; scan_once >/dev/null 2>&1
   [ "$EMITTED" -eq 1 ] && ok "neg: DEFER-NOT-DROP bit (rate-deferred nudge retried after the window cleared)" || bad "defer-not-drop did NOT bite (EMITTED=$EMITTED, want 1) — a throttled nudge was DROPPED"
+
+  # 7) STAGGER (#9): with FLEET_WAKE_STAGGER>0 a wake is spread by the gap — one wake makes the scan take >= the gap.
+  cmd_reset >/dev/null 2>&1; rm -f "$INBOX_DIR"/*.jsonl 2>/dev/null || true; WAKE_MAX_PER_WINDOW=5; WAKE_STAGGER_S=1
+  printf '{"body":"s"}\n' > "$INBOX_DIR/$dead.jsonl"
+  local ts0 ts1; ts0="$(date +%s)"; EMITTED=0; scan_once >/dev/null 2>&1; ts1="$(date +%s)"
+  { [ "$EMITTED" -eq 1 ] && [ "$((ts1 - ts0))" -ge 1 ]; } && ok "neg: STAGGER applied (a wake with stagger=1s took >= 1s)" || bad "stagger did NOT apply (EMITTED=$EMITTED, elapsed=$((ts1-ts0))s)"
+  WAKE_STAGGER_S=0
 
   rm -rf "$tmp" 2>/dev/null || true
   echo ""
