@@ -25,6 +25,35 @@ All notable changes to Fleet are documented here. The format is based on
     fast-forward / an atticed rewind / a FORCE escape), and a dropped commit is recoverable.
   - **WHY (2026-09-11):** a SHARED lane branch was repeatedly `reset --hard origin/main`, dropping in-flight
     slice commits from HEAD (recovered by hand via reflog). The attic makes recovery structural, not manual.
+- **Native reservation adoption (`adopt.sh`, wired into `register.sh`).** When a session is launched to fulfil a
+  Trackboard *reservation* (a signed request to create/launch an agent with a chosen name/role/mission/model),
+  the SessionStart hook now adopts it AUTHORITATIVELY on the real host — seeding the agent's identity overlay
+  (`identities/<sid>.json`, the same file Trackboard's roster reads) + its mission (`goalstack`, run host-locally
+  and window-keyed so it lands reliably) + the device slug, and flipping the reservation to `status=adopted`.
+  This is the on-host counterpart to Trackboard's server-side reconcile task (which best-effort adopts name/role
+  remotely); the native path is what makes the *mission* seed reliable.
+  - **Authenticity (anti-forgery / indirect-prompt-injection).** The `reservations/` dir is shared and
+    on-default-unauthenticated, so `adopt_reservation` honours ONLY reservations whose HMAC `sig` verifies with
+    the per-host key Trackboard mints them with — a hand-dropped forged reservation (that would seed a live
+    agent's goalstack) is ignored. Cross-language authenticity is byproduct-proven: bash `jq -cS 'del(.sig)'` +
+    `openssl … -macopt hexkey:` reproduce Trackboard's canonical payload + signature EXACTLY. After mutating the
+    record the hook RE-SIGNS it (it holds the key) so Trackboard's signed-only read path keeps surfacing it.
+  - **Multi-device correct.** The host slug comes from `$FLEET_HOST` (a launcher/profile env) — never `hostname`;
+    a named-device reservation is adopted only on that device, so a reservation for device A is never silently
+    adopted on device B. The exact rid can be passed via `$FLEET_RESERVATION` (the unambiguous, preferred path);
+    the cwd fallback adopts NONE on ambiguity (never a silent guess).
+  - **Fail-OPEN + back-compat.** Missing `jq`/`openssl`, no key, no/ambiguous match, or a bad signature → a
+    silent no-op (the session registers exactly as before; Trackboard's reconcile task is the backstop). When
+    nothing is adopted, the agent file is byte-identical to the pre-adoption baseline (the `host` field is added
+    only on a clean adoption).
+  - **Forcing function:** `.fleet/bin/selftest-adopt.sh` (hermetic, wired into CI) proves each guarantee BITES
+    with a control that fires — a signed reservation adopts (overlay + mission + flip + re-sign), while a
+    tampered/forged one, an ambiguous cwd match, a `reserved`-status one, and a wrong-host one are all REFUSED,
+    and `register.sh` stays byte-compatible when nothing is adopted. A **cross-language golden** check additionally
+    proves bash's `jq -cS`/`openssl` verification accepts a record signed by Trackboard's *Python* canonicalization
+    (a Python-minted fixture under a key derived from a public string — no real credential), so a future jq/openssl
+    canonicalization drift is caught at CI time without needing Python in this pure-bash repo. (The return
+    direction — Python re-verifies a bash re-signature — is proven in the trackboard suite.)
 
 ### Fixed
 - **Label reservation hardening (pre-merge red-team follow-up to the atomic reservation).** A 6-lens

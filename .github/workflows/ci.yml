@@ -55,7 +55,7 @@ jobs:
           fi
 
   selftest:
-    name: selftest (retire + brain + collateral + labels + attic — safety guards bite)
+    name: selftest (retire + brain + collateral + labels + attic + adopt — safety guards bite)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +83,14 @@ jobs:
           # dropping an un-atticed commit (allows recoverable ones + FORCE escape), and a dropped
           # commit is recoverable. Hermetic (throwaway git repo + mktemp state).
           bash .fleet/bin/selftest-attic.sh
+      - name: Run the native-adoption selftest (Trackboard reservation adoption bites)
+        run: |
+          set -euo pipefail
+          # Proves a SIGNED reservation is adopted (identity overlay + mission seed + reservation flip +
+          # re-sign), while a forged/tampered one, an ambiguous cwd match, a wrong-status or wrong-host
+          # reservation are all REFUSED, and register.sh stays byte-compatible when nothing is adopted.
+          # Hermetic (mktemp state + temp HMAC key + mock goalstack); the live fleet is never touched.
+          bash .fleet/bin/selftest-adopt.sh
 
   skills-install:
     name: skills install (install.sh drops every skill into .claude/skills/)

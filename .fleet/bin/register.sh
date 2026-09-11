@@ -26,6 +26,15 @@ MODEL="$(json_field_str "$INPUT" model)"
 ensure_state
 reap   # clean up dead agents/claims first so labels/counts are accurate
 
+# Native reservation adoption (Trackboard D-v2 S4b): if this session was launched to fulfil a SIGNED reservation
+# for this cwd/host, seed its identity overlay + mission (goalstack) + host binding and flip it to adopted. Sets
+# ADOPTED_HOST only on a clean, authentic, unambiguous match. Fail-OPEN — never blocks registration (no jq/openssl,
+# no key, no/ambiguous match, or a bad signature → a silent no-op, and the agent registers exactly as before).
+ADOPTED_HOST=""
+# shellcheck source=adopt.sh
+. "$DIR/adopt.sh"
+adopt_reservation "$SID" "$CWD"
+
 F="$(agent_file "$SID")"
 SHORT="$(short_sid "$SID")"
 
@@ -51,6 +60,9 @@ TMP="$F.tmp.$$"
   printf '%s,'  "$(jstr model "$MODEL")"
   printf '%s,'  "$(jstr started_at "$STARTED")"
   printf '%s,'  "$(jstr last_seen "$(now_iso)")"
+  # `host` (device slug) is recorded ONLY when a reservation was natively adopted (read_roster surfaces it, and the
+  # reconcile host-qualifier trusts it). When absent, the object is byte-identical to the pre-S4b baseline.
+  [ -n "$ADOPTED_HOST" ] && printf '%s,'  "$(jstr host "$ADOPTED_HOST")"
   printf '%s'   "$(jstr status active)"
   printf '}\n'
 } > "$TMP" 2>/dev/null
