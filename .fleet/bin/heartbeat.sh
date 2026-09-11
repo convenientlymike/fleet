@@ -34,6 +34,14 @@ SID="$(json_field_str "$INPUT" session_id 2>/dev/null)"
 # longer stay invisible until its next prompt. Fail-open — never blocks the tool.
 ensure_self_registered "$SID"
 
+# ---- B7: trackboard KPI reporter (dependency-light, backgrounded, fail-open) ----------------------------------
+# A tool just ran ⇒ record this session's token KPIs. tb_kpi.sh is SIDE-EFFECT-FREE to source (pure fn defs); it
+# resolves the trackboard checkout on THIS box, runs `python3 -m trackboard.telemetry_report` on a BARE python3
+# (PYTHONPATH=<checkout>/src — no fastapi/pydantic venv needed), and breadcrumbs LOUD (marker + board note) if the
+# checkout is unresolvable or the import fails — never a silent no-op. Backgrounded so it never blocks the tool
+# (the trap 'exit 0' ERR above covers any error); a bash fork-throttle bounds it to ~1 python fork / 30s / agent.
+. "$DIR/tb_kpi.sh" 2>/dev/null && _tb_kpi "$SID" >/dev/null 2>&1 &
+
 # ---- DM DELIVERY on the autonomous-turn surface (the reliability backbone's second half) -----------
 # awareness.sh delivers on UserPromptSubmit (prompt-driven turns). But a long autonomous turn submits ONE prompt
 # then runs many tools for minutes — a DM arriving mid-turn would sit unseen until the NEXT prompt (maybe never).
