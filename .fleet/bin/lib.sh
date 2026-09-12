@@ -17,6 +17,10 @@ LABELS_DIR="$STATE_DIR/labels"   # atomic agent-N reservations (mkdir-mutex); th
 INBOX_DIR="$STATE_DIR/inbox"
 BOARD_FILE="$STATE_DIR/board.jsonl"
 LEDGER_FILE="$STATE_DIR/ledger.jsonl"
+# shellcheck disable=SC2034  # consumed by register.sh adopt_reservation (trackboard reservation adoption)
+RESERVATIONS_DIR="$STATE_DIR/reservations"
+# shellcheck disable=SC2034  # consumed by register.sh adopt_reservation (the name/role overlay trackboard reads)
+IDENTITIES_DIR="$STATE_DIR/identities"
 CONFIG_FILE="$FLEET_DIR/config.json"
 # shellcheck disable=SC2034  # consumed by scripts that source this lib (fleet.sh)
 VERSION_FILE="$FLEET_DIR/VERSION"
@@ -692,5 +696,157 @@ _fleet_resolve_state() {
   INBOX_DIR="$STATE_DIR/inbox"
   BOARD_FILE="$STATE_DIR/board.jsonl"
   LEDGER_FILE="$STATE_DIR/ledger.jsonl"
+  RESERVATIONS_DIR="$STATE_DIR/reservations"   # trackboard mints reservations here; adopt_reservation reads them
+  IDENTITIES_DIR="$STATE_DIR/identities"       # the name/role overlay trackboard's roster reads
 }
 _fleet_resolve_state
+
+# ---- trackboard reservation adoption (design §D.4 Path 1 — native register.sh adoption) ---------------------
+# When trackboard mints a reservation targeting THIS window's cwd+device, adopt it on THIS host at SessionStart:
+# write the name/role overlay trackboard reads, seed the mission into the window-keyed goalstack, record the host,
+# and stamp the reservation adopted. This is the AUTHORITATIVE adoption path (deterministic, on the target host,
+# no roster-reconcile race). Reservations are HMAC-signed by trackboard; a record whose sig does not verify is a
+# forgery and is IGNORED (authenticity gate — the shared state dir is unauthenticated on the default box).
+#
+# ADOPT_HOST is set by adopt_reservation on a successful bind so register.sh's agent-file write can include the
+# device `host` field (adoption runs BEFORE that write). Empty ⇒ no adoption ⇒ the agent file is byte-identical to
+# the pre-feature baseline (the back-compat invariant the selftest bites on).
+# shellcheck disable=SC2034  # set here, consumed by register.sh's agent-file writer
+ADOPT_HOST=""
+
+# _reservation_sig_ok <reservation_file> — verify trackboard's HMAC-SHA256 signature EXACTLY as it mints it:
+# HMAC over the canonical (sorted-key, tight-separator) JSON of the whole record MINUS the `sig` field. python3-
+# only (matches trackboard's canonicalization with zero drift); fail-CLOSED (return 1) if python3/key/sig absent.
+# CANONICAL SOURCE of this algorithm: trackboard src/trackboard/fleet.py `_reservation_sig` — keep in lockstep.
+_reservation_sig_ok() {
+  local f="$1" key="$STATE_DIR/.reservation_hmac_key"
+  [ -f "$f" ] && [ -f "$key" ] || return 1
+  _have python3 || return 1
+  FLEET_RES_FILE="$f" FLEET_RES_KEY="$key" python3 -c '
+import json, os, sys, hmac, hashlib
+try:
+    r = json.load(open(os.environ["FLEET_RES_FILE"]))
+    key = open(os.environ["FLEET_RES_KEY"], "rb").read()
+except Exception:
+    sys.exit(1)
+want = r.get("sig")
+if not isinstance(want, str):
+    sys.exit(1)
+payload = json.dumps({k: v for k, v in r.items() if k != "sig"}, sort_keys=True, separators=(",", ":"))
+got = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+sys.exit(0 if hmac.compare_digest(got, want) else 1)
+' 2>/dev/null
+}
+
+# _stamp_reservation_adopted <file> <sid> <slug> — record the bind (bound_sid/bound_host/adopted_via=native/
+# status=adopted) and RE-SIGN so trackboard's read path still accepts the record (every write must carry a valid
+# sig or the UI drops it). Guarded: if python3/key absent it no-ops, degrading to trackboard's reconcile path —
+# never worse than an un-patched checkout. Atomic (tmp + os.replace): no torn reservation file.
+_stamp_reservation_adopted() {
+  local f="$1" sid="$2" slug="$3" key="$STATE_DIR/.reservation_hmac_key"
+  { _have python3 && [ -f "$key" ]; } || return 0
+  FLEET_RES_FILE="$f" FLEET_RES_KEY="$key" FLEET_SID="$sid" FLEET_SLUG="$slug" FLEET_TS="$(now_iso)" python3 -c '
+import json, os, sys, hmac, hashlib, tempfile
+f = os.environ["FLEET_RES_FILE"]
+try:
+    r = json.load(open(f))
+    key = open(os.environ["FLEET_RES_KEY"], "rb").read()
+except Exception:
+    sys.exit(0)
+r["bound_sid"] = os.environ["FLEET_SID"]
+r["bound_host"] = os.environ["FLEET_SLUG"] or None
+r["adopted_via"] = "native"
+r["status"] = "adopted"
+r["updated_at"] = os.environ["FLEET_TS"]
+payload = json.dumps({k: v for k, v in r.items() if k != "sig"}, sort_keys=True, separators=(",", ":"))
+r["sig"] = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+d = os.path.dirname(f) or "."
+fd, tmp = tempfile.mkstemp(dir=d)
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(r, fh, ensure_ascii=False)
+    os.replace(tmp, f)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except Exception:
+        pass
+' 2>/dev/null || true
+}
+
+# adopt_reservation <sid> <cwd> — the native adoption entry point. NEVER errors out (always returns 0) so a normal
+# registration is never blocked; on any doubt (no match / ambiguity / unverified sig / wrong host) it adopts NONE
+# and leaves the reservation pending. Sets ADOPT_HOST on a successful bind.
+adopt_reservation() {
+  local sid="$1" cwd="$2"
+  ADOPT_HOST=""
+  [ -d "$RESERVATIONS_DIR" ] || return 0
+  # this device's slug comes from an env the launcher/daemon passes — NEVER `hostname` (a fleet must not hardcode
+  # or guess its own identity); without it the cwd-fallback cannot host-qualify, so it is skipped (fail-safe).
+  local slug="${TRACKBOARD_DEVICE_SLUG:-${FLEET_DEVICE_SLUG:-}}"
+
+  local rf=""
+  # Path 1 (PREFERRED) — the exact rid the launcher exported: unambiguous, sidesteps every cwd-collision class.
+  if [ -n "${FLEET_RESERVATION:-}" ]; then
+    local cand="$RESERVATIONS_DIR/${FLEET_RESERVATION}.json"
+    [ -f "$cand" ] && rf="$cand"
+  fi
+  # Path 2 (FALLBACK) — newest UNBOUND reservation for THIS cwd AND THIS device in an adoptable status. Requires a
+  # device slug (never cwd-only bind in a multi-device world). >1 match ⇒ ambiguous ⇒ adopt NONE (fail loud).
+  if [ -z "$rf" ] && [ -n "$slug" ]; then
+    local match="" count=0 f bs st
+    for f in "$RESERVATIONS_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      [ "$(json_field_file "$f" "target.cwd")" = "$cwd" ] || continue
+      [ "$(json_field_file "$f" "target.device")" = "$slug" ] || continue
+      bs="$(json_field_file "$f" bound_sid)"
+      { [ -z "$bs" ] || [ "$bs" = "null" ]; } || continue        # already bound → skip
+      st="$(json_field_file "$f" status)"
+      case "$st" in provisioned | launching | launched) : ;; *) continue ;; esac
+      count=$((count + 1)); match="$f"
+    done
+    [ "$count" = 1 ] && rf="$match"                              # exactly one → adopt; 0 or >1 → adopt NONE
+  fi
+
+  [ -n "$rf" ] || return 0
+  _reservation_sig_ok "$rf" || return 0                          # forged / unsigned / tampered → ignore
+
+  # re-check unbound + adoptable on the CHOSEN file (the Path-1 explicit rid did not filter these).
+  local bs st
+  bs="$(json_field_file "$rf" bound_sid)"
+  { [ -z "$bs" ] || [ "$bs" = "null" ]; } || return 0
+  st="$(json_field_file "$rf" status)"
+  case "$st" in provisioned | launching | launched) : ;; *) return 0 ;; esac
+  # host qualifier for the explicit path too: a reservation naming a device must name THIS one (when known).
+  local rdev; rdev="$(json_field_file "$rf" "target.device")"
+  if [ -n "$rdev" ] && [ -n "$slug" ] && [ "$rdev" != "$slug" ]; then return 0; fi
+
+  local name role mission
+  name="$(json_field_file "$rf" display_name)"
+  role="$(json_field_file "$rf" role)"
+  mission="$(json_field_file "$rf" mission)"
+
+  # (a) identities overlay — the name/role trackboard reads (survives the heartbeat rewrite by construction).
+  mkdir -p "$IDENTITIES_DIR" 2>/dev/null || true
+  local itmp="$IDENTITIES_DIR/$sid.json.tmp.$$"
+  {
+    printf '{'
+    printf '%s,' "$(jstr display_name "$name")"
+    printf '%s,' "$(jstr role "$role")"
+    printf '%s'  "$(jstr updated_at "$(now_iso)")"
+    printf '}\n'
+  } > "$itmp" 2>/dev/null && mv -f "$itmp" "$IDENTITIES_DIR/$sid.json" 2>/dev/null || rm -f "$itmp" 2>/dev/null
+
+  # (b) mission seed — host-local, window-keyed goalstack; the ONLY reliable cross-device seed (§D.6). Best-effort.
+  if [ -n "$mission" ] && _have goalstack; then
+    ( cd "$cwd" 2>/dev/null && GOALSTACK_WINDOW="$sid" goalstack set "$mission" >/dev/null 2>&1 ) || true
+  fi
+
+  # (c) hand the device slug to register.sh's agent-file writer (adoption runs BEFORE that write).
+  # shellcheck disable=SC2034  # consumed by register.sh (a different file), so shellcheck can't see the use
+  ADOPT_HOST="$slug"
+
+  # (d) stamp the reservation adopted + re-sign (degrades to trackboard reconcile if it can't).
+  _stamp_reservation_adopted "$rf" "$sid" "$slug"
+  return 0
+}

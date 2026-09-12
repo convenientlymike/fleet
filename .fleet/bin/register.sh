@@ -29,6 +29,11 @@ reap   # clean up dead agents/claims first so labels/counts are accurate
 F="$(agent_file "$SID")"
 SHORT="$(short_sid "$SID")"
 
+# trackboard native adoption (design §D.4) — if a signed reservation targets this window's cwd+device, adopt it
+# here on the target host: writes the name/role overlay + seeds the mission + sets ADOPT_HOST for the agent-file
+# `host` field below. Always a silent no-op on any doubt (returns 0), so it can never block a normal registration.
+adopt_reservation "$SID" "$CWD" || true
+
 if [ -f "$F" ]; then
   # resume / clear / compact of an existing session: reserve keeps the SAME label (stable per session; the
   # file's current label is passed as the continuity hint so an upgrade / reservation-less resume preserves it)
@@ -51,6 +56,9 @@ TMP="$F.tmp.$$"
   printf '%s,'  "$(jstr model "$MODEL")"
   printf '%s,'  "$(jstr started_at "$STARTED")"
   printf '%s,'  "$(jstr last_seen "$(now_iso)")"
+  # device host — emitted ONLY when a reservation was adopted (ADOPT_HOST set). Absent otherwise, so a
+  # non-adopting (baseline) registration writes a byte-identical agent file (the selftest back-compat bite).
+  [ -n "${ADOPT_HOST:-}" ] && printf '%s,'  "$(jstr host "$ADOPT_HOST")"
   printf '%s'   "$(jstr status active)"
   printf '}\n'
 } > "$TMP" 2>/dev/null
